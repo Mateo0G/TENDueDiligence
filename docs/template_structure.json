@@ -1,0 +1,326 @@
+{
+  "paragraph_count": 890,
+  "table_count": 17,
+  "style_counts": {
+    "Title": 2,
+    "normal": 860,
+    "Subtitle": 1,
+    "Heading 1": 27
+  },
+  "headings": [
+    {
+      "text": "",
+      "is_spacer": true
+    },
+    {
+      "text": "Executive Summary",
+      "is_spacer": false
+    },
+    {
+      "text": "",
+      "is_spacer": true
+    },
+    {
+      "text": "Sales and Marketing Report",
+      "is_spacer": false
+    },
+    {
+      "text": "Strengths and Weaknesses of the Sales and Marketing Plan",
+      "is_spacer": false
+    },
+    {
+      "text": "Market Size Analysis",
+      "is_spacer": false
+    },
+    {
+      "text": "Financial Report",
+      "is_spacer": false
+    },
+    {
+      "text": "Analysis of the Financial Proforma — Key Metrics",
+      "is_spacer": false
+    },
+    {
+      "text": "Investment Sufficiency & Valuation Analysis",
+      "is_spacer": false
+    },
+    {
+      "text": "Science and Technology Report",
+      "is_spacer": false
+    },
+    {
+      "text": "What are the technology risks?",
+      "is_spacer": false
+    },
+    {
+      "text": "HR Report & Background Check Confirmation",
+      "is_spacer": false
+    },
+    {
+      "text": "Management Team Biographies",
+      "is_spacer": false
+    },
+    {
+      "text": "Team Members and Board Members",
+      "is_spacer": false
+    },
+    {
+      "text": "Legal Review of Corporate and Deal Documents (Corporate Report)",
+      "is_spacer": false
+    },
+    {
+      "text": "Missing / Recommended Corporate Documents",
+      "is_spacer": false
+    },
+    {
+      "text": "Legal Review — Key Findings at a Glance",
+      "is_spacer": false
+    },
+    {
+      "text": "Intellectual Property Report",
+      "is_spacer": false
+    },
+    {
+      "text": "AccuBreath Patents (Issued):",
+      "is_spacer": false
+    },
+    {
+      "text": "Competition Report (Competitive Landscape)",
+      "is_spacer": false
+    },
+    {
+      "text": "Marketing & Sales Strategies of Competitors (vs. AccuBreath)",
+      "is_spacer": false
+    },
+    {
+      "text": "AccuBreath's Advantage Over Each Competitor",
+      "is_spacer": false
+    },
+    {
+      "text": "Exit Strategy & Comparable-Transaction ROI Analysis",
+      "is_spacer": false
+    },
+    {
+      "text": "Exit Strategy — Definition, Strengths/Weaknesses, and Potential Acquirers",
+      "is_spacer": false
+    },
+    {
+      "text": "Contracts Report",
+      "is_spacer": false
+    },
+    {
+      "text": "Commercial Agreements — Non-Binding (Material Deficiency)",
+      "is_spacer": false
+    },
+    {
+      "text": "Regulatory Report",
+      "is_spacer": false
+    }
+  ],
+  "tables": [
+    {
+      "section": "Market Size Analysis",
+      "rows": 5,
+      "cols": 3,
+      "header_row": [
+        "Source document",
+        "Stated TAM / market",
+        "Stated growth"
+      ]
+    },
+    {
+      "section": "Financial Report",
+      "rows": 7,
+      "cols": 4,
+      "header_row": [
+        "Department",
+        "OpEx",
+        "Payroll",
+        "Share of Use of Funds"
+      ]
+    },
+    {
+      "section": "Analysis of the Financial Proforma — Key Metrics",
+      "rows": 13,
+      "cols": 6,
+      "header_row": [
+        "Metric",
+        "2026",
+        "2027",
+        "2028",
+        "2029",
+        "2030"
+      ]
+    },
+    {
+      "section": "Investment Sufficiency & Valuation Analysis",
+      "rows": 7,
+      "cols": 6,
+      "header_row": [
+        "Source",
+        "Instrument",
+        "Amount / Size",
+        "Valuation Cap",
+        "Discount",
+        "Qualified Financing Min."
+      ]
+    },
+    {
+      "section": "Investment Sufficiency & Valuation Analysis",
+      "rows": 5,
+      "cols": 3,
+      "header_row": [
+        "Scenario",
+        "Conversion price per share",
+        "Effective pre-money"
+      ]
+    },
+    {
+      "section": "Investment Sufficiency & Valuation Analysis",
+      "rows": 6,
+      "cols": 3,
+      "header_row": [
+        "Year",
+        "Operating cash flow ($000s)",
+        "Cumulative ($000s)"
+      ]
+    },
+    {
+      "section": "Team Members and Board Members",
+      "rows": 4,
+      "cols": 3,
+      "header_row": [
+        "Name",
+        "Role",
+        "Equity / Options (per cap table)"
+      ]
+    },
+    {
+      "section": "Team Members and Board Members",
+      "rows": 6,
+      "cols": 3,
+      "header_row": [
+        "Name",
+        "Advisory Role",
+        "Equity / Options"
+      ]
+    },
+    {
+      "section": "Legal Review — Key Findings at a Glance",
+      "rows": 15,
+      "cols": 2,
+      "header_row": [
+        "Item",
+        "Finding"
+      ]
+    },
+    {
+      "section": "AccuBreath Patents (Issued):",
+      "rows": 3,
+      "cols": 6,
+      "header_row": [
+        "Patent No.",
+        "Priority Date",
+        "Filed",
+        "Granted",
+        "Assignee",
+        "Status"
+      ]
+    },
+    {
+      "section": "Marketing & Sales Strategies of Competitors (vs. AccuBreath)",
+      "rows": 9,
+      "cols": 7,
+      "header_row": [
+        "Competitor",
+        "Category",
+        "Weight",
+        "Price (approx.)",
+        "FDA status",
+        "Key strength",
+        "Key weakness vs. AccuBreath"
+      ]
+    },
+    {
+      "section": "Exit Strategy & Comparable-Transaction ROI Analysis",
+      "rows": 5,
+      "cols": 4,
+      "header_row": [
+        "Exit scenario",
+        "Basis",
+        "Implied AccuBreath EV",
+        "Return on $5M entry cap"
+      ]
+    },
+    {
+      "section": "Exit Strategy & Comparable-Transaction ROI Analysis",
+      "rows": 6,
+      "cols": 4,
+      "header_row": [
+        "Comparable exit",
+        "Deal value",
+        "Implied multiple / nature",
+        "If AccuBreath exited similarly → return on $5M cap"
+      ]
+    },
+    {
+      "section": "Exit Strategy — Definition, Strengths/Weaknesses, and Potential Acquirers",
+      "rows": 7,
+      "cols": 4,
+      "header_row": [
+        "Tier",
+        "Acquirer",
+        "Why a fit",
+        "Recent signal"
+      ]
+    },
+    {
+      "section": "Commercial Agreements — Non-Binding (Material Deficiency)",
+      "rows": 15,
+      "cols": 4,
+      "header_row": [
+        "Agreement",
+        "Counterparty",
+        "Status",
+        "Note"
+      ]
+    },
+    {
+      "section": "Regulatory Report",
+      "rows": 7,
+      "cols": 4,
+      "header_row": [
+        "Predicate Device",
+        "Manufacturer",
+        "Product Code",
+        "510(k) No."
+      ]
+    },
+    {
+      "section": "Regulatory Report",
+      "rows": 12,
+      "cols": 2,
+      "header_row": [
+        "Item",
+        "Finding"
+      ]
+    }
+  ],
+  "inline_shape_count": 1,
+  "page_setup": {
+    "page_width_emu": 7772400,
+    "page_height_emu": 10058400,
+    "left_margin_emu": 457200,
+    "right_margin_emu": 457200,
+    "top_margin_emu": 548640,
+    "bottom_margin_emu": 457200
+  },
+  "footer_paragraphs": [
+    "     \t AccuBreath - Due Diligence Report\t"
+  ],
+  "header_paragraphs": [
+    "",
+    ""
+  ],
+  "has_toc_field": true
+}
