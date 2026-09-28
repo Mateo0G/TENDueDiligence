@@ -32,7 +32,7 @@ def run_one_task() -> bool:
     log.info("claimed task %s (%s / %s)", task["id"], task["task_type"], task["task_key"])
     try:
         handler = get_handler(task["task_type"])
-        result = handler(task["payload"])
+        result = handler(task)
     except Exception as exc:
         log.exception("task %s failed", task["id"])
         repo.fail_task(task["id"], str(exc))

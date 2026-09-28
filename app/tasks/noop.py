@@ -5,10 +5,10 @@ from app.tasks.registry import register
 
 
 @register("noop")
-def run_noop(payload: dict) -> dict:
-    return {"echo": payload}
+def run_noop(task: dict) -> dict:
+    return {"echo": task["payload"]}
 
 
 @register("noop_fail")
-def run_noop_fail(payload: dict) -> dict:
-    raise RuntimeError(payload.get("message", "simulated failure"))
+def run_noop_fail(task: dict) -> dict:
+    raise RuntimeError(task["payload"].get("message", "simulated failure"))

@@ -177,8 +177,21 @@ spreadsheet row.
    Case Scenarios, Scalability, Analysis by Persona, Risk Factors) are out of
    scope for v1's Stage 2/3/4 section set.
 
-## Deferred
+## Resolved at Phase 4
 
-- **TOC strategy** — live `TOC` field (requires "Update Field" in Word on
-  first open, matches what the reference does) vs. a static plain-text
-  heading list with placeholder page numbers. Revisit at Phase 4.
+- **TOC strategy** — went with a live `TOC` field (`app/docx_builder.py::
+  _add_toc_field`), matching what the reference report itself does. Word
+  regenerates entries and page numbers on "Update Field" (F9) at first
+  open; python-docx can't compute page numbers itself so there was no way
+  around that step either way.
+- **Styling fidelity, exact values** — deep XML inspection (`scripts/
+  inspect_docx_styles*.py`) found the true defaults: Open Sans 11pt body
+  (docDefaults, not python-docx's default Calibri), Heading 1 bold 15pt,
+  tables using plain single black 0.5pt borders with bold+centered header
+  cells and no shading (the reference's own `Table1` table-style reference
+  doesn't resolve to anything in its styles.xml, so direct border
+  formatting was used instead of a named style). One quirk found and
+  deliberately *not* replicated: the reference's own Title/Subtitle
+  paragraphs carry a direct 13pt run-level override that contradicts their
+  own style definitions (25pt/20pt) — judged an authoring artifact, not
+  intent, so the generator uses the style-defined sizes.
