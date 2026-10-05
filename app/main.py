@@ -2,7 +2,10 @@
 pipeline work (Claude calls, docx rendering) happens in the separate worker
 process (app/worker.py), never on this request/response cycle.
 """
+import io
+import mimetypes
 import uuid
+import zipfile
 from datetime import datetime
 
 from fastapi import FastAPI, HTTPException, UploadFile
@@ -12,6 +15,27 @@ from pydantic import BaseModel
 from app import classify, pipeline, repo, storage
 from app.docx_builder import build_report_docx
 from app.models import ContentBlock
+
+# Real datarooms arrive as a single zip almost always -- skip macOS/zip
+# metadata cruft and directory entries, extract everything else as if it
+# had been uploaded individually.
+_ZIP_IGNORE_PREFIXES = ("__MACOSX/",)
+_ZIP_IGNORE_NAMES = (".DS_Store", "Thumbs.db")
+
+
+def _iter_zip_entries(data: bytes):
+    """Yields (internal_path, bytes) for every real file in a zip archive,
+    skipping directories and OS/zip metadata cruft. A corrupt zip raises
+    BadZipFile -- the caller turns that into a 400, not a 500."""
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        for info in zf.infolist():
+            if info.is_dir():
+                continue
+            name = info.filename
+            basename = name.rsplit("/", 1)[-1]
+            if name.startswith(_ZIP_IGNORE_PREFIXES) or basename in _ZIP_IGNORE_NAMES or basename.startswith("."):
+                continue
+            yield name, zf.read(info)
 
 app = FastAPI(title="TEN Due Diligence Report Generator")
 
@@ -125,36 +149,59 @@ def get_job(job_id: str):
     )
 
 
+def _store_dataroom_file(job_id: str, classify_path: str, original_filename: str, data: bytes, content_type: str | None) -> DataroomFileOut:
+    """Shared by both a directly-uploaded file and one extracted from a zip.
+    `classify_path` carries the zip's internal folder path (if any) so a
+    file like "financial/cap_table.xlsx" gets the benefit of the "financial"
+    folder name as a classification signal, same as app/classify.py already
+    does for a plain filename -- `original_filename` is just the basename,
+    kept clean for display."""
+    object_key = f"dataroom/{job_id}/{uuid.uuid4()}-{original_filename}"
+    storage.put_bytes(object_key, data, content_type=content_type)
+
+    category, method = classify.categorize_file(classify_path)
+    file_id = repo.add_dataroom_file(
+        job_id=job_id,
+        object_key=object_key,
+        original_filename=original_filename,
+        file_kind="dataroom",
+        category=category,
+        category_method=method,
+        size_bytes=len(data),
+        content_type=content_type,
+    )
+    return _to_file_out({
+        "id": file_id,
+        "original_filename": original_filename,
+        "file_kind": "dataroom",
+        "category": category,
+        "category_method": method,
+        "size_bytes": len(data),
+        "content_type": content_type,
+    })
+
+
 @app.post("/jobs/{job_id}/dataroom", response_model=UploadResult)
 async def upload_dataroom_files(job_id: str, files: list[UploadFile]):
+    """Accepts plain documents and/or .zip archives, mixed freely in one
+    upload -- real datarooms almost always arrive as a single zip, so each
+    .zip is transparently expanded and every entry inside it is stored and
+    classified exactly as if it had been uploaded on its own."""
     _require_job(job_id)
     uploaded = []
     for f in files:
         data = await f.read()
-        object_key = f"dataroom/{job_id}/{uuid.uuid4()}-{f.filename}"
-        storage.put_bytes(object_key, data, content_type=f.content_type)
-
-        category, method = classify.categorize_file(f.filename)
-        file_id = repo.add_dataroom_file(
-            job_id=job_id,
-            object_key=object_key,
-            original_filename=f.filename,
-            file_kind="dataroom",
-            category=category,
-            category_method=method,
-            size_bytes=len(data),
-            content_type=f.content_type,
-        )
-        row = {
-            "id": file_id,
-            "original_filename": f.filename,
-            "file_kind": "dataroom",
-            "category": category,
-            "category_method": method,
-            "size_bytes": len(data),
-            "content_type": f.content_type,
-        }
-        uploaded.append(_to_file_out(row))
+        if f.filename.lower().endswith(".zip"):
+            try:
+                entries = list(_iter_zip_entries(data))
+            except zipfile.BadZipFile:
+                raise HTTPException(status_code=400, detail=f"{f.filename} is not a valid zip file")
+            for internal_path, entry_data in entries:
+                basename = internal_path.rsplit("/", 1)[-1]
+                content_type = mimetypes.guess_type(basename)[0]
+                uploaded.append(_store_dataroom_file(job_id, internal_path, basename, entry_data, content_type))
+        else:
+            uploaded.append(_store_dataroom_file(job_id, f.filename, f.filename, data, f.content_type))
     return UploadResult(uploaded=uploaded)
 
 

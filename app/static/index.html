@@ -273,11 +273,13 @@ async function renderJob() {
         `).join("")}
       </div>
       <h3>Upload dataroom files</h3>
+      <div class="muted" style="margin-bottom:6px;">Accepts a .zip of the whole dataroom, individual files, or a mix of both &mdash; a zip is extracted and every file inside it is classified individually.</div>
       <input type="file" id="dataroom-input" multiple>
       <div class="toolbar">
         <button onclick="uploadDataroom()">Upload dataroom files</button>
       </div>
-      <h3>Upload pitch deck</h3>
+      <h3>Upload pitch deck <span class="muted" style="text-transform:none;font-weight:400;">(optional)</span></h3>
+      <div class="muted" style="margin-bottom:6px;">Skip this if the pitch deck is already included in your dataroom zip.</div>
       <input type="file" id="pitchdeck-input">
       <div class="toolbar">
         <button onclick="uploadPitchDeck()">Upload pitch deck</button>
