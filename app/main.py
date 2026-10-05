@@ -23,10 +23,19 @@ _ZIP_IGNORE_PREFIXES = ("__MACOSX/",)
 _ZIP_IGNORE_NAMES = (".DS_Store", "Thumbs.db")
 
 
-def _iter_zip_entries(data: bytes):
+_ZIP_MAX_NESTING = 5  # Google Drive's "download folder as zip" wraps each
+# subfolder as its own nested zip inside the outer one -- recurse into those,
+# bounded so a malicious/corrupt zip-of-zips can't recurse forever.
+
+
+def _iter_zip_entries(data: bytes, _prefix: str = "", _depth: int = 0):
     """Yields (internal_path, bytes) for every real file in a zip archive,
-    skipping directories and OS/zip metadata cruft. A corrupt zip raises
-    BadZipFile -- the caller turns that into a 400, not a 500."""
+    skipping directories and OS/zip metadata cruft, and recursing into any
+    entry that is itself a zip (Google Drive splits large folders into
+    per-subfolder zips nested inside the top-level download). A corrupt
+    outer zip raises BadZipFile -- the caller turns that into a 400, not a
+    500; a corrupt or too-deeply-nested inner zip is yielded as-is instead,
+    so one bad nested archive doesn't fail the whole upload."""
     with zipfile.ZipFile(io.BytesIO(data)) as zf:
         for info in zf.infolist():
             if info.is_dir():
@@ -35,7 +44,15 @@ def _iter_zip_entries(data: bytes):
             basename = name.rsplit("/", 1)[-1]
             if name.startswith(_ZIP_IGNORE_PREFIXES) or basename in _ZIP_IGNORE_NAMES or basename.startswith("."):
                 continue
-            yield name, zf.read(info)
+            full_path = f"{_prefix}{name}"
+            entry_data = zf.read(info)
+            if basename.lower().endswith(".zip") and _depth < _ZIP_MAX_NESTING:
+                try:
+                    yield from _iter_zip_entries(entry_data, f"{full_path.rsplit('/', 1)[0]}/" if "/" in full_path else "", _depth + 1)
+                    continue
+                except zipfile.BadZipFile:
+                    pass
+            yield full_path, entry_data
 
 app = FastAPI(title="TEN Due Diligence Report Generator")
 
