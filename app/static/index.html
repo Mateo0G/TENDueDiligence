@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TEN Capital Due Diligence Report Generator</title>
+<style>
+  :root {
+    --navy: #0f1f3d;
+    --navy-light: #1c3561;
+    --accent: #c9a24b;
+    --bg: #f4f5f7;
+    --panel: #ffffff;
+    --border: #dfe2e8;
+    --text: #1c2230;
+    --muted: #6b7280;
+    --green: #1a7f37;
+    --red: #b42318;
+    --amber: #b7791f;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg); color: var(--text); font-size: 14px;
+  }
+  header {
+    background: var(--navy); color: #fff; padding: 16px 24px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  header h1 { font-size: 17px; margin: 0; font-weight: 600; letter-spacing: .2px; }
+  header .tag { color: var(--accent); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; }
+  .layout { display: flex; min-height: calc(100vh - 56px); }
+  .sidebar {
+    width: 300px; background: var(--panel); border-right: 1px solid var(--border);
+    padding: 16px; flex-shrink: 0;
+  }
+  .main { flex: 1; padding: 24px; max-width: 980px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 18px 20px; margin-bottom: 16px;
+  }
+  .card h2 { font-size: 14px; margin: 0 0 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--navy-light); }
+  .card h3 { font-size: 13px; margin: 16px 0 8px; color: var(--muted); font-weight: 600; }
+  button {
+    background: var(--navy); color: #fff; border: none; border-radius: 6px;
+    padding: 8px 14px; font-size: 13px; cursor: pointer; font-weight: 600;
+  }
+  button:hover:not(:disabled) { background: var(--navy-light); }
+  button:disabled { background: #c6cad3; cursor: not-allowed; }
+  button.secondary { background: #fff; color: var(--navy); border: 1px solid var(--border); }
+  button.secondary:hover:not(:disabled) { background: #f1f3f6; }
+  button.danger { background: var(--red); }
+  input[type=text], textarea {
+    width: 100%; padding: 7px 9px; border: 1px solid var(--border); border-radius: 5px;
+    font-size: 13px; font-family: inherit; background: #fff; color: var(--text);
+  }
+  textarea { resize: vertical; min-height: 60px; }
+  label { font-size: 12px; font-weight: 600; color: var(--muted); display: block; margin-bottom: 4px; }
+  .job-item {
+    padding: 9px 10px; border-radius: 6px; cursor: pointer; margin-bottom: 4px; font-size: 13px;
+  }
+  .job-item:hover { background: #f1f3f6; }
+  .job-item.active { background: var(--navy); color: #fff; }
+  .job-item .meta { font-size: 11px; color: var(--muted); }
+  .job-item.active .meta { color: #c7d0e3; }
+  .badge {
+    display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 11px;
+    font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+  }
+  .badge.pending { background: #e5e7eb; color: #374151; }
+  .badge.running { background: #dbeafe; color: #1e40af; }
+  .badge.awaiting_review { background: #fef3c7; color: var(--amber); }
+  .badge.completed { background: #dcfce7; color: var(--green); }
+  .badge.failed { background: #fee2e2; color: var(--red); }
+  .progress-row { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
+  .progress-bar { flex: 1; height: 8px; background: #e5e7eb; border-radius: 99px; overflow: hidden; }
+  .progress-bar > div { height: 100%; background: var(--navy-light); }
+  .progress-label { font-size: 12px; color: var(--muted); white-space: nowrap; }
+  .stage-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+  .stage-row:last-child { border-bottom: none; }
+  .stage-row .title { flex: 1; font-weight: 600; }
+  .stage-row .hint { font-size: 12px; color: var(--muted); }
+  table.data { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.data th, table.data td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  table.data th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; }
+  .file-row { display: flex; justify-content: space-between; padding: 5px 0; font-size: 13px; border-bottom: 1px solid var(--border); }
+  .file-row:last-child { border-bottom: none; }
+  .file-row .cat { font-size: 11px; color: var(--muted); }
+  .section-item { border: 1px solid var(--border); border-radius: 6px; margin-bottom: 8px; }
+  .section-item .head {
+    display: flex; justify-content: space-between; align-items: center; padding: 9px 12px;
+    cursor: pointer; font-weight: 600; font-size: 13px;
+  }
+  .section-item .head:hover { background: #f8f9fb; }
+  .section-item .body { padding: 12px; border-top: 1px solid var(--border); display: none; }
+  .section-item.open .body { display: block; }
+  .block-editor { border: 1px solid var(--border); border-radius: 5px; padding: 8px; margin-bottom: 8px; background: #fafbfc; }
+  .block-editor .type-label { font-size: 10px; font-weight: 700; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }
+  .block-editor table { width: 100%; border-collapse: collapse; }
+  .block-editor table td { border: 1px solid var(--border); padding: 2px; }
+  .block-editor table input { border: none; width: 100%; font-size: 12px; padding: 4px; }
+  .empty { color: var(--muted); font-size: 13px; padding: 10px 0; }
+  .error-msg { background: #fee2e2; color: var(--red); padding: 8px 12px; border-radius: 6px; font-size: 13px; margin-bottom: 12px; }
+  .toolbar { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  .score-fill { display: inline-block; width: 50px; }
+  a.docx-link { color: var(--navy-light); font-weight: 600; text-decoration: none; }
+  a.docx-link:hover { text-decoration: underline; }
+  .muted { color: var(--muted); }
+  .flex-between { display: flex; justify-content: space-between; align-items: center; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>TEN Capital &mdash; Due Diligence Report Generator</h1>
+  <span class="tag">Internal Tool</span>
+</header>
+
+<div class="layout">
+  <div class="sidebar">
+    <h2 style="font-size:12px;text-transform:uppercase;color:var(--muted);margin:0 0 10px;">New Job</h2>
+    <label for="new-company">Company name</label>
+    <input type="text" id="new-company" placeholder="e.g. Acme Diagnostics">
+    <div class="toolbar">
+      <button onclick="createJob()">Create Job</button>
+    </div>
+    <h2 style="font-size:12px;text-transform:uppercase;color:var(--muted);margin:20px 0 10px;">Jobs</h2>
+    <div id="job-list"></div>
+  </div>
+
+  <div class="main" id="main">
+    <div class="empty">Select a job from the left, or create a new one to get started.</div>
+  </div>
+</div>
+
+<script>
+const API = "";
+let currentJobId = null;
+let pollTimer = null;
+let openSections = new Set();
+
+async function api(method, path, body, isFormData) {
+  const opts = { method, headers: {} };
+  if (body !== undefined) {
+    if (isFormData) {
+      opts.body = body;
+    } else {
+      opts.headers["Content-Type"] = "application/json";
+      opts.body = JSON.stringify(body);
+    }
+  }
+  const resp = await fetch(API + path, opts);
+  if (!resp.ok) {
+    let detail;
+    try { detail = (await resp.json()).detail; } catch (e) { detail = resp.statusText; }
+    throw new Error(detail || `HTTP ${resp.status}`);
+  }
+  const ct = resp.headers.get("content-type") || "";
+  if (ct.includes("application/json")) return resp.json();
+  return resp;
+}
+
+function badge(status) {
+  return `<span class="badge ${status}">${status.replace("_", " ")}</span>`;
+}
+
+async function loadJobs() {
+  const jobs = await api("GET", "/jobs");
+  const list = document.getElementById("job-list");
+  if (jobs.length === 0) {
+    list.innerHTML = '<div class="empty">No jobs yet.</div>';
+    return;
+  }
+  list.innerHTML = jobs.map(j => `
+    <div class="job-item ${j.id === currentJobId ? 'active' : ''}" onclick="selectJob('${j.id}')">
+      <div>${escapeHtml(j.company_name)}</div>
+      <div class="meta">${j.status}${j.vertical ? ' &middot; ' + j.vertical : ''}</div>
+    </div>
+  `).join("");
+}
+
+async function createJob() {
+  const input = document.getElementById("new-company");
+  const name = input.value.trim();
+  if (!name) { alert("Enter a company name first."); return; }
+  try {
+    const job = await api("POST", "/jobs", { company_name: name });
+    input.value = "";
+    await loadJobs();
+    selectJob(job.id);
+  } catch (e) {
+    alert("Could not create job: " + e.message);
+  }
+}
+
+function escapeHtml(s) {
+  const d = document.createElement("div");
+  d.textContent = s == null ? "" : String(s);
+  return d.innerHTML;
+}
+
+async function selectJob(id) {
+  currentJobId = id;
+  openSections.clear();
+  await loadJobs();
+  if (pollTimer) clearTimeout(pollTimer);
+  await renderJob();
+}
+
+function taskCounts(tasks, taskType) {
+  const rows = tasks.filter(t => t.task_type === taskType);
+  const done = rows.filter(t => t.status === "completed").length;
+  const failed = rows.filter(t => t.status === "failed").length;
+  return { total: rows.length, done, failed };
+}
+
+async function renderJob() {
+  if (!currentJobId) return;
+  let job, tasks, files;
+  try {
+    job = await api("GET", "/jobs/" + currentJobId);
+    tasks = await api("GET", "/jobs/" + currentJobId + "/tasks");
+  } catch (e) {
+    document.getElementById("main").innerHTML = `<div class="error-msg">${escapeHtml(e.message)}</div>`;
+    return;
+  }
+  files = job.dataroom_files;
+
+  const draft = taskCounts(tasks, "draft_section");
+  const compile = taskCounts(tasks, "compile_draft");
+  const qa = taskCounts(tasks, "qa_score");
+  const reportCard = taskCounts(tasks, "report_card");
+  const gap = taskCounts(tasks, "gap_analysis");
+  const mitigation = taskCounts(tasks, "mitigation_strategy");
+  const finalRender = taskCounts(tasks, "final_render");
+
+  const hasFiles = files.some(f => f.file_kind === "dataroom");
+  const stage2Started = draft.total > 0;
+  const stage2Done = stage2Started && draft.done === draft.total && draft.failed === 0;
+  const stage3Started = compile.total > 0;
+  const stage3Done = job.status === "awaiting_review" || job.status === "completed";
+  const approved = !!job.draft_approved_at;
+  const stage4Started = qa.total > 0;
+  const stage4Done = stage4Started && reportCard.done === 1;
+  const stage5Started = gap.total > 0;
+  const stage5Done = mitigation.done === 1;
+  const stage6Started = finalRender.total > 0;
+  const stage6Done = job.status === "completed";
+
+  const main = document.getElementById("main");
+  main.innerHTML = `
+    <div class="card">
+      <div class="flex-between">
+        <div>
+          <h2 style="margin-bottom:4px;">${escapeHtml(job.company_name)}</h2>
+          <div>${badge(job.status)} ${job.vertical ? `<span class="muted" style="margin-left:8px;">${job.vertical}</span>` : ""}</div>
+        </div>
+        <div>
+          <a class="docx-link" href="/jobs/${currentJobId}/draft.docx" target="_blank">Preview draft (.docx)</a>
+          ${job.status === "completed" ? `<br><a class="docx-link" href="/jobs/${currentJobId}/report.docx" target="_blank">Download final report</a>` : ""}
+        </div>
+      </div>
+    </div>
+
+    <div class="card" id="upload-card">
+      <h2>1. Dataroom &amp; Pitch Deck</h2>
+      <div id="file-list">
+        ${files.length === 0 ? '<div class="empty">No files uploaded yet.</div>' : files.map(f => `
+          <div class="file-row">
+            <span>${escapeHtml(f.original_filename)} ${f.file_kind === "pitch_deck" ? "<em>(pitch deck)</em>" : ""}</span>
+            <span class="cat">${f.category || "uncategorized"}</span>
+          </div>
+        `).join("")}
+      </div>
+      <h3>Upload dataroom files</h3>
+      <input type="file" id="dataroom-input" multiple>
+      <div class="toolbar">
+        <button onclick="uploadDataroom()">Upload dataroom files</button>
+      </div>
+      <h3>Upload pitch deck</h3>
+      <input type="file" id="pitchdeck-input">
+      <div class="toolbar">
+        <button onclick="uploadPitchDeck()">Upload pitch deck</button>
+      </div>
+      <div class="toolbar">
+        <button class="secondary" onclick="classifyVertical()" ${!hasFiles ? "disabled" : ""}>
+          Classify vertical${job.vertical ? " (reclassify)" : ""}
+        </button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>2. Pipeline</h2>
+
+      <div class="stage-row">
+        <div class="title">Stage 2 &mdash; Draft sections</div>
+        <div class="hint">${draft.total ? `${draft.done}/${draft.total} drafted${draft.failed ? `, ${draft.failed} failed` : ""}` : "not started"}</div>
+        <button onclick="runStage('stage2')" ${!hasFiles || stage2Started ? "disabled" : ""}>Start</button>
+      </div>
+      ${draft.total ? `<div class="progress-row"><div class="progress-bar"><div style="width:${(draft.done/draft.total*100)||0}%"></div></div></div>` : ""}
+
+      <div class="stage-row">
+        <div class="title">Stage 3 &mdash; Compile draft</div>
+        <div class="hint">${stage3Done ? "compiled" : (stage3Started ? "compiling..." : "waiting on Stage 2")}</div>
+        <button onclick="runStage('stage3')" ${!stage2Done || stage3Started ? "disabled" : ""}>Start</button>
+      </div>
+
+      ${stage3Done ? renderReviewSection(job) : ""}
+
+      <div class="stage-row">
+        <div class="title">Approve draft</div>
+        <div class="hint">${approved ? "approved" : "required before Stage 4 can run"}</div>
+        <button onclick="approveDraft()" ${job.status !== "awaiting_review" || approved ? "disabled" : ""}>Approve</button>
+      </div>
+
+      <div class="stage-row">
+        <div class="title">Stage 4 &mdash; QA &amp; scoring</div>
+        <div class="hint">${qa.total ? `${qa.done}/${qa.total} checks${qa.failed ? `, ${qa.failed} failed` : ""}, report card ${reportCard.done ? "done" : "pending"}` : "waiting on approval"}</div>
+        <button onclick="runStage('stage4')" ${!approved || stage4Started ? "disabled" : ""}>Start</button>
+      </div>
+      ${qa.total ? `<div class="progress-row"><div class="progress-bar"><div style="width:${(qa.done/qa.total*100)||0}%"></div></div></div>` : ""}
+
+      <div class="stage-row">
+        <div class="title">Stage 5 &mdash; Gap analysis &amp; mitigation</div>
+        <div class="hint">${stage5Done ? "done" : (stage5Started ? "in progress" : "waiting on Stage 4")}</div>
+        <button onclick="runStage('stage5')" ${!stage4Done || stage5Started ? "disabled" : ""}>Start</button>
+      </div>
+
+      <div class="stage-row">
+        <div class="title">Stage 6 &mdash; Final render</div>
+        <div class="hint">${stage6Done ? "report ready" : (stage6Started ? "rendering..." : "waiting on Stage 5")}</div>
+        <button onclick="runStage('stage6')" ${!stage5Done || stage6Started ? "disabled" : ""}>Start</button>
+      </div>
+    </div>
+
+    ${qa.total ? '<div class="card" id="qa-card"><h2>QA Scores</h2><div id="qa-body">loading...</div></div>' : ""}
+    ${stage5Started ? '<div class="card" id="gap-card"><h2>Gap Analysis &amp; Mitigation</h2><div id="gap-body">loading...</div></div>' : ""}
+  `;
+
+  if (stage3Done) renderSectionsList();
+  if (qa.total) renderQaScores();
+  if (stage5Started) renderGapAnalysis();
+
+  // Self-rescheduling poll: only keep polling while a stage is actively
+  // running. Once a stage finishes, polling stops until the user starts
+  // the next one -- this avoids wiping out in-progress section edits with
+  // a full re-render during the (often long) human-review pause, where
+  // nothing on the server is changing anyway.
+  if (pollTimer) clearTimeout(pollTimer);
+  const anyInProgress =
+    (stage2Started && !stage2Done) ||
+    (stage3Started && !stage3Done) ||
+    (stage4Started && !stage4Done) ||
+    (stage5Started && !stage5Done) ||
+    (stage6Started && !stage6Done);
+  if (anyInProgress) pollTimer = setTimeout(renderJob, 4000);
+}
+
+function renderReviewSection(job) {
+  return `
+    <div style="padding:10px 0;">
+      <h3>Review &amp; edit sections</h3>
+      <div id="sections-list">loading...</div>
+    </div>
+  `;
+}
+
+async function renderSectionsList() {
+  const el = document.getElementById("sections-list");
+  if (!el) return;
+  const sections = await api("GET", "/jobs/" + currentJobId + "/sections");
+  el.innerHTML = sections.map(s => `
+    <div class="section-item ${openSections.has(s.section_key) ? 'open' : ''}" id="sec-${cssId(s.section_key)}">
+      <div class="head" onclick="toggleSection('${escapeAttr(s.section_key)}')">
+        <span>${escapeHtml(s.title)}</span>
+        <span class="muted">${s.content.length} block(s)</span>
+      </div>
+      <div class="body">${openSections.has(s.section_key) ? sectionEditorHtml(s) : ""}</div>
+    </div>
+  `).join("");
+}
+
+function cssId(key) { return key.replace(/[^a-zA-Z0-9]/g, "_"); }
+function escapeAttr(s) { return s.replace(/'/g, "\\'"); }
+
+function toggleSection(key) {
+  if (openSections.has(key)) openSections.delete(key); else openSections.add(key);
+  renderSectionsList();
+}
+
+function sectionEditorHtml(s) {
+  const blocksHtml = s.content.map((b, i) => blockEditorHtml(b, i)).join("");
+  return `
+    <label>Title</label>
+    <input type="text" id="title-${cssId(s.section_key)}" value="${escapeAttr2(s.title)}">
+    <div id="blocks-${cssId(s.section_key)}" style="margin-top:10px;">${blocksHtml}</div>
+    <div class="toolbar">
+      <button onclick="saveSection('${escapeAttr(s.section_key)}')">Save changes</button>
+    </div>
+  `;
+}
+function escapeAttr2(s) { return escapeHtml(s).replace(/"/g, "&quot;"); }
+
+function blockEditorHtml(block, i) {
+  if (block.type === "paragraph") {
+    return `<div class="block-editor" data-type="paragraph">
+      <div class="type-label">Paragraph</div>
+      <textarea data-idx="${i}" class="block-field">${escapeHtml(block.text)}</textarea>
+    </div>`;
+  }
+  if (block.type === "heading") {
+    return `<div class="block-editor" data-type="heading">
+      <div class="type-label">Heading</div>
+      <input type="text" data-idx="${i}" class="block-field" value="${escapeAttr2(block.text)}">
+    </div>`;
+  }
+  if (block.type === "table") {
+    const headerRow = `<tr>${block.headers.map((h, c) => `<td><input value="${escapeAttr2(h)}" data-row="-1" data-col="${c}"></td>`).join("")}</tr>`;
+    const bodyRows = block.rows.map((row, r) => `<tr>${row.map((cell, c) => `<td><input value="${escapeAttr2(cell)}" data-row="${r}" data-col="${c}"></td>`).join("")}</tr>`).join("");
+    return `<div class="block-editor" data-type="table" data-idx="${i}" data-ncols="${block.headers.length}">
+      <div class="type-label">Table</div>
+      <table>${headerRow}${bodyRows}</table>
+    </div>`;
+  }
+  return "";
+}
+
+function saveSection(sectionKey) {
+  const container = document.getElementById("blocks-" + cssId(sectionKey));
+  const title = document.getElementById("title-" + cssId(sectionKey)).value;
+  const blockEls = container.querySelectorAll(".block-editor");
+  const blocks = [];
+  blockEls.forEach(el => {
+    const type = el.dataset.type;
+    if (type === "paragraph") {
+      blocks.push({ type: "paragraph", text: el.querySelector(".block-field").value });
+    } else if (type === "heading") {
+      blocks.push({ type: "heading", text: el.querySelector(".block-field").value });
+    } else if (type === "table") {
+      const ncols = parseInt(el.dataset.ncols, 10);
+      const inputs = el.querySelectorAll("input");
+      const headers = [];
+      const rowsMap = {};
+      inputs.forEach(inp => {
+        const row = parseInt(inp.dataset.row, 10);
+        const col = parseInt(inp.dataset.col, 10);
+        if (row === -1) headers[col] = inp.value;
+        else { rowsMap[row] = rowsMap[row] || []; rowsMap[row][col] = inp.value; }
+      });
+      const rows = Object.keys(rowsMap).sort((a, b) => a - b).map(r => rowsMap[r]);
+      blocks.push({ type: "table", headers, rows });
+    }
+  });
+  api("PATCH", "/jobs/" + currentJobId + "/sections/" + encodeURIComponent(sectionKey), { title, blocks })
+    .then(() => renderSectionsList())
+    .catch(e => alert("Could not save section: " + e.message));
+}
+
+async function renderQaScores() {
+  const el = document.getElementById("qa-body");
+  if (!el) return;
+  const scores = await api("GET", "/jobs/" + currentJobId + "/qa-scores");
+  if (scores.length === 0) { el.innerHTML = '<div class="empty">No scores yet.</div>'; return; }
+  const blocks = {};
+  scores.forEach(s => { (blocks[s.block] = blocks[s.block] || []).push(s); });
+  el.innerHTML = Object.entries(blocks).map(([block, rows]) => `
+    <h3>${block.replace(/_/g, " ")}</h3>
+    <table class="data">
+      <tr><th>Assessment</th><th>Score</th><th>Scale</th><th>Summary</th></tr>
+      ${rows.map(r => `
+        <tr>
+          <td>${escapeHtml(r.assessment_name)}</td>
+          <td>${r.score === null ? "&mdash;" : r.score}</td>
+          <td>${r.scale}</td>
+          <td>${escapeHtml((r.findings && r.findings.summary) || "")}</td>
+        </tr>
+      `).join("")}
+    </table>
+  `).join("");
+}
+
+async function renderGapAnalysis() {
+  const el = document.getElementById("gap-body");
+  if (!el) return;
+  const data = await api("GET", "/jobs/" + currentJobId + "/gap-analysis");
+  if (!data.gap_analysis) { el.innerHTML = '<div class="empty">Gap analysis still running...</div>'; return; }
+  const mitByGap = {};
+  (data.mitigation_strategy ? data.mitigation_strategy.mitigations : []).forEach(m => { mitByGap[m.gap_title] = m.mitigation; });
+  el.innerHTML = `
+    <p class="muted">${escapeHtml(data.gap_analysis.summary)}</p>
+    <table class="data">
+      <tr><th>Gap</th><th>Severity</th><th>Description</th><th>Mitigation</th></tr>
+      ${data.gap_analysis.gaps.map(g => `
+        <tr>
+          <td>${escapeHtml(g.title)}</td>
+          <td>${g.severity}</td>
+          <td>${escapeHtml(g.description)}</td>
+          <td>${escapeHtml(mitByGap[g.title] || "(pending)")}</td>
+        </tr>
+      `).join("")}
+    </table>
+  `;
+}
+
+async function uploadDataroom() {
+  const input = document.getElementById("dataroom-input");
+  if (!input.files.length) { alert("Choose at least one file."); return; }
+  const fd = new FormData();
+  for (const f of input.files) fd.append("files", f);
+  try {
+    await api("POST", "/jobs/" + currentJobId + "/dataroom", fd, true);
+    input.value = "";
+    await renderJob();
+  } catch (e) { alert("Upload failed: " + e.message); }
+}
+
+async function uploadPitchDeck() {
+  const input = document.getElementById("pitchdeck-input");
+  if (!input.files.length) { alert("Choose a pitch deck file."); return; }
+  const fd = new FormData();
+  fd.append("file", input.files[0]);
+  try {
+    await api("POST", "/jobs/" + currentJobId + "/pitch-deck", fd, true);
+    input.value = "";
+    await renderJob();
+  } catch (e) { alert("Upload failed: " + e.message); }
+}
+
+async function classifyVertical() {
+  try {
+    await api("POST", "/jobs/" + currentJobId + "/classify-vertical");
+    await renderJob();
+  } catch (e) { alert("Classification failed: " + e.message); }
+}
+
+async function runStage(stage) {
+  try {
+    await api("POST", "/jobs/" + currentJobId + "/" + stage);
+    await renderJob();
+  } catch (e) { alert("Could not start " + stage + ": " + e.message); }
+}
+
+async function approveDraft() {
+  try {
+    await api("POST", "/jobs/" + currentJobId + "/approve-draft");
+    await renderJob();
+    await renderSectionsList();
+  } catch (e) { alert("Could not approve draft: " + e.message); }
+}
+
+loadJobs();
+</script>
+</body>
+</html>

@@ -179,6 +179,13 @@ def list_tasks_for_job(job_id) -> list[dict]:
             return cur.fetchall()
 
 
+def list_jobs() -> list[dict]:
+    with pool.connection() as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute("SELECT * FROM jobs ORDER BY created_at DESC")
+            return cur.fetchall()
+
+
 def get_job(job_id) -> Optional[dict]:
     with pool.connection() as conn:
         with conn.cursor(row_factory=dict_row) as cur:

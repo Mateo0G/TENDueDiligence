@@ -3,9 +3,10 @@ pipeline work (Claude calls, docx rendering) happens in the separate worker
 process (app/worker.py), never on this request/response cycle.
 """
 import uuid
+from datetime import datetime
 
 from fastapi import FastAPI, HTTPException, UploadFile
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 from app import classify, pipeline, repo, storage
@@ -13,6 +14,15 @@ from app.docx_builder import build_report_docx
 from app.models import ContentBlock
 
 app = FastAPI(title="TEN Due Diligence Report Generator")
+
+
+@app.get("/")
+def serve_ui():
+    """The brief's non-goals call for "a simple polling-based status page",
+    not a frontend framework -- this is one static file with vanilla JS,
+    served directly by the same FastAPI app, no build step or separate
+    service."""
+    return FileResponse("app/static/index.html")
 
 
 class CreateJobRequest(BaseModel):
@@ -49,6 +59,7 @@ class JobOut(BaseModel):
     company_name: str
     status: str
     vertical: str | None
+    draft_approved_at: datetime | None
     dataroom_files: list[DataroomFileOut]
 
 
@@ -78,6 +89,28 @@ def create_job(req: CreateJobRequest):
     return CreateJobResponse(id=str(job["id"]), company_name=job["company_name"], status=job["status"])
 
 
+class JobSummaryOut(BaseModel):
+    id: str
+    company_name: str
+    status: str
+    vertical: str | None
+    created_at: datetime
+
+
+@app.get("/jobs", response_model=list[JobSummaryOut])
+def list_jobs():
+    """Backs the UI's landing page -- the brief's "simple polling-based
+    status page" needs somewhere to list existing jobs, not just look one
+    up by id."""
+    return [
+        JobSummaryOut(
+            id=str(j["id"]), company_name=j["company_name"], status=j["status"],
+            vertical=j["vertical"], created_at=j["created_at"],
+        )
+        for j in repo.list_jobs()
+    ]
+
+
 @app.get("/jobs/{job_id}", response_model=JobOut)
 def get_job(job_id: str):
     job = _require_job(job_id)
@@ -87,6 +120,7 @@ def get_job(job_id: str):
         company_name=job["company_name"],
         status=job["status"],
         vertical=job["vertical"],
+        draft_approved_at=job["draft_approved_at"],
         dataroom_files=[_to_file_out(f) for f in files],
     )
 
@@ -176,6 +210,29 @@ def start_stage2(job_id: str):
     job = _require_job(job_id)
     task_ids = pipeline.create_stage2_tasks(job_id, job["company_name"])
     return Stage2Result(task_ids=task_ids)
+
+
+class TaskOut(BaseModel):
+    id: str
+    stage: int
+    task_type: str
+    task_key: str
+    status: str
+    error: str | None
+
+
+@app.get("/jobs/{job_id}/tasks", response_model=list[TaskOut])
+def list_tasks(job_id: str):
+    """Backs the UI's progress bars -- e.g. "14/20 sections drafted" during
+    Stage 2, polled client-side rather than pushed."""
+    _require_job(job_id)
+    return [
+        TaskOut(
+            id=str(t["id"]), stage=t["stage"], task_type=t["task_type"],
+            task_key=t["task_key"], status=t["status"], error=t["error"],
+        )
+        for t in repo.list_tasks_for_job(job_id)
+    ]
 
 
 class Stage3Result(BaseModel):
