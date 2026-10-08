@@ -189,7 +189,10 @@ def draft_section(
 ) -> DraftingOutput:
     client = anthropic.Anthropic()
     params = build_drafting_request(spec, company_name, dataroom_text, pitch_deck_text, dependency_context)
-    response = client.messages.create(**params)
+    # max_tokens=32000 pushes the SDK's estimated non-streaming duration past
+    # its 10-minute cutoff, where it refuses a plain create() call outright.
+    with client.messages.stream(**params) as stream:
+        response = stream.get_final_message()
     return parse_structured_response(response, DraftingOutput)
 
 
