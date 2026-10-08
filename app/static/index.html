@@ -226,6 +226,16 @@ async function renderJob() {
   }
   files = job.dataroom_files;
 
+  // The sections/QA/gap bodies below are repopulated by their own async
+  // fetch right after this innerHTML replacement -- carry over whatever
+  // they already showed instead of resetting to "loading..." every poll
+  // tick, or the page visibly collapses to a one-line placeholder and then
+  // snaps back to full height a moment later on every single poll (a few
+  // seconds apart, this reads as the whole page stuttering up and down).
+  const prevSectionsList = document.getElementById("sections-list")?.innerHTML;
+  const prevQaBody = document.getElementById("qa-body")?.innerHTML;
+  const prevGapBody = document.getElementById("gap-body")?.innerHTML;
+
   const draft = taskCounts(tasks, "draft_section");
   const compile = taskCounts(tasks, "compile_draft");
   const qa = taskCounts(tasks, "qa_score");
@@ -246,6 +256,7 @@ async function renderJob() {
   const stage5Done = mitigation.done === 1;
   const stage6Started = finalRender.total > 0;
   const stage6Done = job.status === "completed";
+  const anyFailed = tasks.some(t => t.status === "failed");
 
   const main = document.getElementById("main");
   main.innerHTML = `
@@ -294,6 +305,14 @@ async function renderJob() {
     <div class="card">
       <h2>2. Pipeline</h2>
 
+      ${anyFailed ? `
+        <div class="stage-row">
+          <div class="title">Some tasks failed</div>
+          <div class="hint">Retrying re-queues every failed task (e.g. after a bug fix) so dependent tasks can finally run.</div>
+          <button onclick="retryFailedTasks()">Retry failed tasks</button>
+        </div>
+      ` : ""}
+
       <div class="stage-row">
         <div class="title">Stage 2 &mdash; Draft sections</div>
         <div class="hint">${draft.total ? `${draft.done}/${draft.total} drafted${draft.failed ? `, ${draft.failed} failed` : ""}` : "not started"}</div>
@@ -307,7 +326,7 @@ async function renderJob() {
         <button onclick="runStage('stage3')" ${!stage2Done || stage3Started ? "disabled" : ""}>Start</button>
       </div>
 
-      ${stage3Done ? renderReviewSection(job) : ""}
+      ${stage3Done ? renderReviewSection(job, prevSectionsList) : ""}
 
       <div class="stage-row">
         <div class="title">Approve draft</div>
@@ -335,8 +354,8 @@ async function renderJob() {
       </div>
     </div>
 
-    ${qa.total ? '<div class="card" id="qa-card"><h2>QA Scores</h2><div id="qa-body">loading...</div></div>' : ""}
-    ${stage5Started ? '<div class="card" id="gap-card"><h2>Gap Analysis &amp; Mitigation</h2><div id="gap-body">loading...</div></div>' : ""}
+    ${qa.total ? `<div class="card" id="qa-card"><h2>QA Scores</h2><div id="qa-body">${prevQaBody || "loading..."}</div></div>` : ""}
+    ${stage5Started ? `<div class="card" id="gap-card"><h2>Gap Analysis &amp; Mitigation</h2><div id="gap-body">${prevGapBody || "loading..."}</div></div>` : ""}
   `;
 
   if (stage3Done) renderSectionsList();
@@ -358,11 +377,11 @@ async function renderJob() {
   if (anyInProgress) pollTimer = setTimeout(renderJob, 4000);
 }
 
-function renderReviewSection(job) {
+function renderReviewSection(job, prevSectionsList) {
   return `
     <div style="padding:10px 0;">
       <h3>Review &amp; edit sections</h3>
-      <div id="sections-list">loading...</div>
+      <div id="sections-list">${prevSectionsList || "loading..."}</div>
     </div>
   `;
 }
@@ -540,6 +559,14 @@ async function runStage(stage) {
     await api("POST", "/jobs/" + currentJobId + "/" + stage);
     await renderJob();
   } catch (e) { alert("Could not start " + stage + ": " + e.message); }
+}
+
+async function retryFailedTasks() {
+  try {
+    const result = await api("POST", "/jobs/" + currentJobId + "/retry-failed-tasks");
+    await renderJob();
+    if (result.retried === 0) alert("No failed tasks to retry.");
+  } catch (e) { alert("Could not retry failed tasks: " + e.message); }
 }
 
 async function approveDraft() {

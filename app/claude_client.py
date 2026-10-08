@@ -56,6 +56,16 @@ def _output_config(model_cls) -> dict:
     return {"format": {"type": "json_schema", "schema": _strict_schema(model_cls.model_json_schema())}}
 
 
+def _create(client, **params):
+    """Every call in this module with max_tokens this high needs this: the
+    SDK estimates a plain non-streaming create() at a high max_tokens could
+    run past its 10-minute cutoff and refuses the call outright before even
+    sending it. Streaming has no such cap -- same params, same parsed
+    result either way."""
+    with client.messages.stream(**params) as stream:
+        return stream.get_final_message()
+
+
 def parse_structured_response(response, model_cls):
     if response.stop_reason == "max_tokens":
         raise RuntimeError(
@@ -190,10 +200,7 @@ def draft_section(
 ) -> DraftingOutput:
     client = anthropic.Anthropic()
     params = build_drafting_request(spec, company_name, dataroom_text, pitch_deck_text, dependency_context)
-    # max_tokens=32000 pushes the SDK's estimated non-streaming duration past
-    # its 10-minute cutoff, where it refuses a plain create() call outright.
-    with client.messages.stream(**params) as stream:
-        response = stream.get_final_message()
+    response = _create(client, **params)
     return parse_structured_response(response, DraftingOutput)
 
 
@@ -220,7 +227,11 @@ def build_qa_request(spec: QASpec, company_name: str, report_text: str, dataroom
     user_content = f"{spec.instruction.format(company=company_name)}\n\n{scale_note}"
     return dict(
         model=QA_MODEL,
-        max_tokens=16000,
+        # QA reads the full compiled report (all 25 sections) plus up to
+        # 150k chars of unfiltered dataroom text -- confirmed against a real
+        # dataroom: denser than any Stage 2 drafting prompt, so it needs at
+        # least as much headroom (see build_drafting_request's max_tokens).
+        max_tokens=32000,
         system=_qa_system_blocks(report_text, dataroom_text),
         output_config={"effort": "high", **_output_config(QAScoreOutput)},
         messages=[{"role": "user", "content": user_content}],
@@ -235,7 +246,7 @@ def score_assessment(
 ) -> QAScoreOutput:
     client = anthropic.Anthropic()
     params = build_qa_request(spec, company_name, report_text, dataroom_text)
-    response = client.messages.create(**params)
+    response = _create(client, **params)
     return parse_structured_response(response, QAScoreOutput)
 
 
@@ -274,9 +285,10 @@ def analyze_gaps(company_name: str, report_text: str, qa_summary_text: str) -> G
         f"### Compiled due diligence report\n{report_text}\n\n"
         f"### QA assessment scores and findings\n{qa_summary_text}"
     )
-    response = client.messages.create(
+    response = _create(
+        client,
         model=GAP_MITIGATION_MODEL,
-        max_tokens=16000,
+        max_tokens=32000,
         system=GAP_ANALYSIS_SYSTEM_PROMPT,
         output_config={"effort": "high", **_output_config(GapAnalysisOutput)},
         messages=[{"role": "user", "content": prompt}],
@@ -293,9 +305,10 @@ def generate_mitigations(company_name: str, gap_analysis: GapAnalysisOutput) -> 
         f"Build a mitigation strategy for each weakness identified in the {company_name} "
         f"due diligence report's gap analysis below.\n\n### Gap analysis\n{gap_analysis.summary}\n\n{gaps_text}"
     )
-    response = client.messages.create(
+    response = _create(
+        client,
         model=GAP_MITIGATION_MODEL,
-        max_tokens=16000,
+        max_tokens=32000,
         system=MITIGATION_SYSTEM_PROMPT,
         output_config={"effort": "high", **_output_config(MitigationOutput)},
         messages=[{"role": "user", "content": prompt}],

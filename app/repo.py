@@ -111,12 +111,51 @@ def complete_task(task_id, result: dict) -> None:
         )
 
 
+MAX_TASK_ATTEMPTS = 3
+
+
 def fail_task(task_id, error: str) -> None:
+    """Bumps attempts; while retries remain, puts the task back to
+    'pending' instead of leaving it permanently 'failed'. A transient
+    failure (rate limit, a truncated response) would otherwise block every
+    task that depends on it forever -- e.g. Stage 4's report_card, which
+    depends on every scoring task and has no other way to become ready
+    again. SKIP LOCKED in claim_task means no special handling is needed
+    for a row that goes back to pending here; it just gets reclaimed on
+    the next poll."""
     with pool.connection() as conn:
         conn.execute(
-            "UPDATE tasks SET status='failed', error=%s, attempts=attempts+1, updated_at=now() WHERE id=%s",
-            (error, task_id),
+            """
+            UPDATE tasks
+            SET status = CASE WHEN attempts + 1 < %(max_attempts)s THEN 'pending' ELSE 'failed' END,
+                error = %(error)s,
+                attempts = attempts + 1,
+                locked_by = NULL,
+                locked_at = NULL,
+                updated_at = now()
+            WHERE id = %(task_id)s
+            """,
+            {"task_id": task_id, "error": error, "max_attempts": MAX_TASK_ATTEMPTS},
         )
+
+
+def retry_failed_tasks(job_id) -> int:
+    """Human-triggered reset for a job's 'failed' tasks (e.g. after a code
+    fix lands) -- distinct from fail_task's automatic in-process retry,
+    since MAX_TASK_ATTEMPTS can still be exhausted by a bug that's since
+    been fixed, with nothing left to automatically retry it. Resets
+    attempts to 0 so the exhausted-retries case gets a fresh budget.
+    Returns the number of tasks reset."""
+    with pool.connection() as conn:
+        cur = conn.execute(
+            """
+            UPDATE tasks
+            SET status='pending', error=NULL, attempts=0, locked_by=NULL, locked_at=NULL, updated_at=now()
+            WHERE job_id=%s AND status='failed'
+            """,
+            (job_id,),
+        )
+        return cur.rowcount
 
 
 def release_task(task_id) -> None:

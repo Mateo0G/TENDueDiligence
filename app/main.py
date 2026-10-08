@@ -335,6 +335,23 @@ def list_tasks(job_id: str):
     ]
 
 
+class RetryFailedTasksResult(BaseModel):
+    retried: int
+
+
+@app.post("/jobs/{job_id}/retry-failed-tasks", response_model=RetryFailedTasksResult)
+def retry_failed_tasks(job_id: str):
+    """Resets every 'failed' task on this job back to 'pending' so the
+    worker picks them up again -- e.g. after a bug (like a max_tokens
+    truncation) that caused the failure has since been fixed. Without this,
+    a failed task with no further automatic retries left (see
+    repo.fail_task's MAX_TASK_ATTEMPTS) stays failed forever, and anything
+    depending on it (Stage 4's report_card depends on every scoring task)
+    stays stuck pending right along with it."""
+    _require_job(job_id)
+    return RetryFailedTasksResult(retried=repo.retry_failed_tasks(job_id))
+
+
 class Stage3Result(BaseModel):
     task_id: str
 
