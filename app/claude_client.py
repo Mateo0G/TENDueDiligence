@@ -56,6 +56,11 @@ def _output_config(model_cls) -> dict:
 
 
 def parse_structured_response(response, model_cls):
+    if response.stop_reason == "max_tokens":
+        raise RuntimeError(
+            "Claude's response was cut off at the max_tokens limit before it finished "
+            "(no complete JSON output) -- raise max_tokens for this call or shorten its input"
+        )
     text = next(b.text for b in response.content if b.type == "text")
     return model_cls.model_validate(json.loads(text))
 
@@ -160,7 +165,12 @@ def build_drafting_request(
     )
     kwargs = dict(
         model=DRAFTING_MODEL,
-        max_tokens=16000,
+        # Real datarooms push far more source text into the prompt than the
+        # fixtures Phases 3-6 were built against (confirmed against a real
+        # life-sciences dataroom: "effort": "high" reasoning plus a dense
+        # answer regularly ran past the old 16000-token cap, cutting the
+        # response off mid-JSON). 32000 gives that headroom back.
+        max_tokens=32000,
         system=_drafting_system_blocks(),
         output_config={"effort": "high", **_output_config(DraftingOutput)},
         messages=[{"role": "user", "content": user_content}],
