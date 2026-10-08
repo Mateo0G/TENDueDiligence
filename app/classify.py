@@ -23,13 +23,18 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
         "budget", "revenue", "burn_rate", "runway", "valuation",
         "term_sheet", "termsheet", "income_statement", "forecast",
         "unit_economics", "cap_table", "captable",
+        # Non-dilutive funding (grants/subawards) is still money in/out of
+        # the company -- same section (financial_draft) discusses it --
+        # even though it carries none of the above deal-finance vocabulary.
+        "grant", "subaward", "sub_award", "non_dilutive", "nondilutive",
+        "nih", "nsf", "arpa",
     ],
     "legal_corporate": [
         "certificate_of_incorporation", "bylaws", "operating_agreement",
         "articles_of_incorporation", "board_minutes", "board_resolution",
         "stock_purchase", "safe_agreement", "convertible_note",
         "incorporation", "shareholder", "founder_agreement", "vesting",
-        "corporate",
+        "corporate", "governance", "manager_consent", "conversion",
     ],
     "ip": [
         "patent", "trademark", "copyright", "intellectual_property",
@@ -46,6 +51,9 @@ CATEGORY_KEYWORDS: dict[str, list[str]] = {
         "sales", "marketing", "customer", "pipeline", "crm", "gtm",
         "go_to_market", "market_research", "market_size", "tam_sam_som",
         "brand", "campaign", "lead_gen", "channel_partner", "distributor",
+        # competition_report pulls this category (plus science_tech) --
+        # competitor-landscape files otherwise carry none of the above.
+        "competitor", "competitive", "competition", "benchmark",
     ],
     "science_tech": [
         "technical", "technology", "architecture", "product_spec",
@@ -98,6 +106,20 @@ def _normalize(text: str) -> str:
 
 def _score(haystack: str, keywords: list[str]) -> int:
     return sum(1 for kw in keywords if kw in haystack)
+
+
+_PITCH_DECK_KEYWORDS = ("pitch_deck", "pitchdeck")
+
+
+def is_pitch_deck_path(filename: str, path: str = "") -> bool:
+    """True for a file that is itself the pitch deck, so a dataroom zip that
+    bundles the pitch deck inside it (rather than it being uploaded through
+    the dedicated endpoint) still gets routed to file_kind="pitch_deck" --
+    otherwise it's invisible both to pipeline.pitch_deck_text (wrong
+    file_kind) and to every category-filtered Stage 2 section (no
+    "pitch_deck" dataroom category exists to catch it either)."""
+    haystack = _normalize(f"{path}/{filename}")
+    return any(kw in haystack for kw in _PITCH_DECK_KEYWORDS)
 
 
 def categorize_file(filename: str, path: str = "") -> tuple[str | None, str]:

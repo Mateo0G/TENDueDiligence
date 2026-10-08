@@ -91,3 +91,14 @@ class MitigationOutput(BaseModel):
     Analysis output, proposes one mitigation per identified gap."""
     summary: str
     mitigations: list[MitigationItem]
+
+
+class FileCategoryOutput(BaseModel):
+    """Intake fallback (app/claude_client.py categorize_file_llm): only
+    called for a file app/classify.py's keyword matching couldn't place --
+    "none" is a real, valid answer here (a file may genuinely fit none of
+    the 8 categories), not a parsing escape hatch."""
+    category: Literal[
+        "financial", "legal_corporate", "ip", "hr", "sales_marketing",
+        "science_tech", "contracts", "regulatory", "none",
+    ]

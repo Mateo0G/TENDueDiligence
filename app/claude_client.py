@@ -11,7 +11,7 @@ import json
 
 import anthropic
 
-from app.models import DraftingOutput, GapAnalysisOutput, MitigationOutput, QAScoreOutput
+from app.models import DraftingOutput, FileCategoryOutput, GapAnalysisOutput, MitigationOutput, QAScoreOutput
 from app.qa_spec import QASpec
 from app.reference_report import get_full_reference_text
 from app.sections_spec import SectionSpec
@@ -19,6 +19,7 @@ from app.sections_spec import SectionSpec
 DRAFTING_MODEL = "claude-sonnet-5"
 QA_MODEL = "claude-sonnet-5"  # per the brief's model routing: Sonnet for QA scoring
 GAP_MITIGATION_MODEL = "claude-sonnet-5"
+CATEGORIZE_MODEL = "claude-haiku-4-5-20251001"  # intake fallback only -- cheap/fast, not quality-critical
 
 # Batch requests need the full JSON schema up front (no .parse() convenience
 # wrapper on that path); the sync path uses the same schema for consistency
@@ -300,3 +301,41 @@ def generate_mitigations(company_name: str, gap_analysis: GapAnalysisOutput) -> 
         messages=[{"role": "user", "content": prompt}],
     )
     return parse_structured_response(response, MitigationOutput)
+
+
+CATEGORY_NAMES = (
+    "financial", "legal_corporate", "ip", "hr", "sales_marketing",
+    "science_tech", "contracts", "regulatory",
+)
+
+
+def categorize_file_llm(filename: str, path: str) -> str | None:
+    """Fallback for a file app/classify.py's keyword matching couldn't place
+    into any of the 8 dataroom categories -- called from the upload path
+    (app/main.py), not from Stage 2/4, so it never adds latency to drafting
+    or QA. Haiku, not Sonnet: this is a cheap one-of-9 classification, not a
+    quality-critical drafting call. Returns None on a genuine "none" answer
+    or if the call itself fails -- intake shouldn't fail an otherwise-good
+    upload over one file's classification.
+    """
+    try:
+        client = anthropic.Anthropic()
+        response = client.messages.create(
+            model=CATEGORIZE_MODEL,
+            max_tokens=200,
+            output_config={"effort": "low", **_output_config(FileCategoryOutput)},
+            messages=[{
+                "role": "user",
+                "content": (
+                    "Classify this due-diligence dataroom file into exactly one category "
+                    "from its filename and folder path alone.\n\n"
+                    f"Path: {path}\nFilename: {filename}\n\n"
+                    f"Categories: {', '.join(CATEGORY_NAMES)}. "
+                    "Use \"none\" only if it genuinely fits none of them."
+                ),
+            }],
+        )
+        result = parse_structured_response(response, FileCategoryOutput)
+    except Exception:
+        return None
+    return None if result.category == "none" else result.category

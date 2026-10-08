@@ -10,5 +10,10 @@ from app.config import DATABASE_URL
 # SSH tunnel (dev only -- Phase 8's in-network deployment won't go through
 # one) that idle gap is long enough to trip the tunnel's own idle timeout.
 pool = ConnectionPool(
-    DATABASE_URL, min_size=1, max_size=5, open=True, check=ConnectionPool.check_connection
+    # max_size covers the web service's own request handling plus the
+    # worker's concurrent task slots (app/worker.py's WORKER_CONCURRENCY,
+    # default 6) -- each only holds a connection for one short query, not for
+    # the lifetime of a task, but enough slots must fit at once to avoid
+    # queuing behind the pool itself.
+    DATABASE_URL, min_size=1, max_size=10, open=True, check=ConnectionPool.check_connection
 )

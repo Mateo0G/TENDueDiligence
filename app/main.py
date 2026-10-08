@@ -12,7 +12,7 @@ from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
-from app import classify, pipeline, repo, storage
+from app import classify, claude_client, pipeline, repo, storage
 from app.docx_builder import build_report_docx
 from app.models import ContentBlock
 
@@ -173,10 +173,46 @@ def _store_dataroom_file(job_id: str, classify_path: str, original_filename: str
     folder name as a classification signal, same as app/classify.py already
     does for a plain filename -- `original_filename` is just the basename,
     kept clean for display."""
+    if classify.is_pitch_deck_path(classify_path):
+        # A dataroom zip that bundles the pitch deck inside it, rather than
+        # it being uploaded through the dedicated endpoint -- route it the
+        # same way that endpoint does so pipeline.pitch_deck_text actually
+        # picks it up (see classify.is_pitch_deck_path's docstring).
+        object_key = f"pitch-deck/{job_id}/{uuid.uuid4()}-{original_filename}"
+        storage.put_bytes(object_key, data, content_type=content_type)
+        file_id = repo.add_dataroom_file(
+            job_id=job_id,
+            object_key=object_key,
+            original_filename=original_filename,
+            file_kind="pitch_deck",
+            category=None,
+            category_method=None,
+            size_bytes=len(data),
+            content_type=content_type,
+        )
+        repo.set_job_pitch_deck_key(job_id, object_key)
+        return _to_file_out({
+            "id": file_id,
+            "original_filename": original_filename,
+            "file_kind": "pitch_deck",
+            "category": None,
+            "category_method": None,
+            "size_bytes": len(data),
+            "content_type": content_type,
+        })
+
     object_key = f"dataroom/{job_id}/{uuid.uuid4()}-{original_filename}"
     storage.put_bytes(object_key, data, content_type=content_type)
 
     category, method = classify.categorize_file(classify_path)
+    if category is None:
+        # Keyword matching found nothing -- ask Haiku rather than silently
+        # dropping the file out of every Stage 2 section's dataroom text
+        # (dataroom_text_for_categories only includes a file whose category
+        # is in a section's list; "uncategorized" has no section at all).
+        llm_category = claude_client.categorize_file_llm(original_filename, classify_path)
+        if llm_category is not None:
+            category, method = llm_category, "llm"
     file_id = repo.add_dataroom_file(
         job_id=job_id,
         object_key=object_key,
