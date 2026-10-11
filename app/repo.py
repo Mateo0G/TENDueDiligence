@@ -248,6 +248,14 @@ def set_job_pitch_deck_key(job_id, object_key: str) -> None:
         )
 
 
+def set_job_logo_key(job_id, object_key: str) -> None:
+    with pool.connection() as conn:
+        conn.execute(
+            "UPDATE jobs SET logo_key=%s, updated_at=now() WHERE id=%s",
+            (object_key, job_id),
+        )
+
+
 def set_job_status(job_id, status: str) -> None:
     with pool.connection() as conn:
         conn.execute(

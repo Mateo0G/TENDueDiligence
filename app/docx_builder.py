@@ -19,18 +19,35 @@ styles*.py, see docs/template_structure.md):
   are applied as direct table-level formatting instead.
 """
 import io
+import os
 from datetime import date
 
 import docx
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.image.image import Image as DocxImage
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-from docx.shared import Pt, Inches
+from docx.shared import Emu, Pt, Inches
 
 from app.reference_report import get_disclaimer_text
 
 FONT_NAME = "Open Sans"
+
+_ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets")
+_TEN_LOGO_PATH = os.path.join(_ASSETS_DIR, "ten_capital_logo.png")
+
+
+def _scaled_dimensions(image_bytes: bytes, max_width_in: float, max_height_in: float) -> tuple[Emu, Emu]:
+    """(width, height) for image_bytes scaled down to fit within both caps
+    while preserving its native aspect ratio -- python-docx's own Image
+    reader (no Pillow dependency) gives the native size; the smaller of the
+    two candidate scale factors is the binding constraint, same principle
+    as CSS's `object-fit: contain`."""
+    image = DocxImage.from_blob(image_bytes)
+    native_width, native_height = image.width, image.height
+    scale = min(Inches(max_width_in) / native_width, Inches(max_height_in) / native_height, 1.0)
+    return Emu(round(native_width * scale)), Emu(round(native_height * scale))
 
 
 def _set_run_font(run, size_pt, bold=False):
@@ -85,12 +102,53 @@ def _configure_page(doc):
     section.bottom_margin = Inches(0.5)
 
 
+def _add_page_number_field(paragraph):
+    run = paragraph.add_run()
+    _set_run_font(run, 11)
+    r = run._element
+    fld_begin = OxmlElement("w:fldChar")
+    fld_begin.set(qn("w:fldCharType"), "begin")
+    instr_text = OxmlElement("w:instrText")
+    instr_text.set(qn("xml:space"), "preserve")
+    instr_text.text = "PAGE"
+    fld_separate = OxmlElement("w:fldChar")
+    fld_separate.set(qn("w:fldCharType"), "separate")
+    fld_end = OxmlElement("w:fldChar")
+    fld_end.set(qn("w:fldCharType"), "end")
+    r.append(fld_begin)
+    r.append(instr_text)
+    r.append(fld_separate)
+    r.append(fld_end)
+
+
 def _add_footer(doc, company_name):
-    footer = doc.sections[0].footer
+    """TEN-branded footer on every page: the TEN Capital Network mark, the
+    report title centered, and the page number right-aligned -- matching
+    the hand-built reference reports' footer layout (see
+    docs/template_structure.md), not just a bare line of text."""
+    section = doc.sections[0]
+    footer = section.footer
     p = footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
     p.text = ""
-    run = p.add_run(f"{company_name} - Due Diligence Report")
+
+    usable_width_in = (
+        section.page_width - section.left_margin - section.right_margin
+    ) / 914400
+    with open(_TEN_LOGO_PATH, "rb") as f:
+        logo_bytes = f.read()
+    width, height = _scaled_dimensions(logo_bytes, max_width_in=1.1, max_height_in=0.4)
+    p.add_run().add_picture(io.BytesIO(logo_bytes), width=width, height=height)
+
+    # Two tab stops, same layout the reference footer itself uses: one
+    # centering the report title in the usable width, one right-aligning
+    # the page number at the margin.
+    tab_stops = p.paragraph_format.tab_stops
+    tab_stops.add_tab_stop(Inches(usable_width_in / 2), alignment=WD_TAB_ALIGNMENT.CENTER)
+    tab_stops.add_tab_stop(Inches(usable_width_in), alignment=WD_TAB_ALIGNMENT.RIGHT)
+
+    run = p.add_run(f"\t{company_name} – Due Diligence Report\t")
     _set_run_font(run, 11)
+    _add_page_number_field(p)
 
 
 def _add_toc_field(doc):
