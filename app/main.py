@@ -66,6 +66,14 @@ def serve_ui():
     return FileResponse("app/static/index.html")
 
 
+@app.get("/static/ten-capital-logo.png")
+def serve_ten_logo():
+    """The UI's own TEN Capital branding (header logo, favicon) -- a single
+    named route rather than a full StaticFiles mount, matching serve_ui's
+    FileResponse pattern above with no new dependency for one fixed asset."""
+    return FileResponse("app/static/ten-capital-logo.png")
+
+
 class CreateJobRequest(BaseModel):
     company_name: str
 
@@ -151,6 +159,35 @@ def list_jobs():
         )
         for j in repo.list_jobs()
     ]
+
+
+@app.delete("/jobs/{job_id}", status_code=204)
+def delete_job(job_id: str):
+    """Deletes a job and everything under it -- dataroom files, the pitch
+    deck, the logo, any rendered docx, and every task/section/score row
+    (the last three cascade in Postgres; R2 objects don't, so those are
+    removed here first while the job row -- and the object keys on it --
+    still exist). Best-effort on storage: a single missing/already-gone
+    object shouldn't block deleting the rest, since the whole point is
+    letting someone clean up test jobs without a human re-checking R2."""
+    job = _require_job(job_id)
+    for f in repo.list_dataroom_files(job_id):
+        try:
+            storage.delete(f["object_key"])
+        except Exception:
+            pass
+    for key in (job["logo_key"], job["output_key"]):
+        if key:
+            try:
+                storage.delete(key)
+            except Exception:
+                pass
+    repo.delete_job(job_id)
+    # Explicit Response, not a bare return -- FastAPI stamps a
+    # Content-Type: application/json header on an implicit None return even
+    # at 204, which has no body at all; a strict client (ours included)
+    # then fails trying to JSON-parse an empty string.
+    return Response(status_code=204)
 
 
 @app.get("/jobs/{job_id}", response_model=JobOut)
