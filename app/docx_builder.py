@@ -24,7 +24,7 @@ from datetime import date
 
 import docx
 from docx.enum.table import WD_TABLE_ALIGNMENT
-from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_TAB_ALIGNMENT
 from docx.image.image import Image as DocxImage
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
@@ -255,8 +255,19 @@ def _add_content_block(doc, block: dict):
         _add_table_block(doc, block["headers"], block["rows"])
 
 
-def _build_cover_and_front_matter(doc, company_name: str):
+def _build_cover_and_front_matter(doc, company_name: str, logo_bytes: bytes | None = None):
     _add_footer(doc, company_name)
+
+    if logo_bytes:
+        # Matches the reference reports' cover layout: the client's own
+        # logo, centered, above the company name -- capped well under the
+        # usable page width/height so an unusually square or oversized
+        # source image can't dominate the cover page.
+        logo_para = doc.add_paragraph()
+        logo_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        width, height = _scaled_dimensions(logo_bytes, max_width_in=4.5, max_height_in=1.75)
+        logo_para.add_run().add_picture(io.BytesIO(logo_bytes), width=width, height=height)
+        doc.add_paragraph()
 
     cover_title = doc.add_paragraph(style="Title")
     cover_title.add_run(company_name)
@@ -365,14 +376,30 @@ def _add_gap_analysis_and_mitigation(doc, gap_analysis: dict | None, mitigation_
     )
 
 
-def build_report_docx(company_name: str, report_sections: list[dict]) -> bytes:
+def _force_field_update_on_open(doc):
+    """Without this, the live TOC field (see _add_toc_field) shows its raw
+    placeholder text -- "Right-click and choose Update Field..." -- until
+    someone manually refreshes it, which reads as a broken, unfinished
+    document to anyone who doesn't know to do that. This setting tells Word
+    to recompute every field itself the moment the file is opened, so the
+    TOC is already correct on first view."""
+    element = doc.settings.element
+    update_fields = OxmlElement("w:updateFields")
+    update_fields.set(qn("w:val"), "true")
+    element.append(update_fields)
+
+
+def build_report_docx(company_name: str, report_sections: list[dict], logo_bytes: bytes | None = None) -> bytes:
     """The Stage 3/4 review-checkpoint draft: cover page + the 25 drafted
     sections only. report_sections: rows from repo.list_report_sections,
-    already ordered by order_index."""
+    already ordered by order_index. logo_bytes: the job's uploaded company
+    logo image, if any (see app.main's logo upload endpoint) -- optional,
+    the cover page falls back to text-only when it's absent."""
     doc = docx.Document()
     _configure_styles(doc)
     _configure_page(doc)
-    _build_cover_and_front_matter(doc, company_name)
+    _force_field_update_on_open(doc)
+    _build_cover_and_front_matter(doc, company_name, logo_bytes)
     _add_report_sections(doc, report_sections)
 
     buffer = io.BytesIO()
@@ -386,6 +413,7 @@ def build_final_report_docx(
     qa_scores: list[dict],
     gap_analysis: dict | None,
     mitigation_strategy: dict | None,
+    logo_bytes: bytes | None = None,
 ) -> bytes:
     """The Stage 6 final render: the same 25 sections, plus the QA Report
     Card and Gap Analysis/Mitigation appendices folded in, per the brief's
@@ -394,7 +422,8 @@ def build_final_report_docx(
     doc = docx.Document()
     _configure_styles(doc)
     _configure_page(doc)
-    _build_cover_and_front_matter(doc, company_name)
+    _force_field_update_on_open(doc)
+    _build_cover_and_front_matter(doc, company_name, logo_bytes)
     _add_report_sections(doc, report_sections)
     _add_qa_report_card(doc, qa_scores)
     _add_gap_analysis_and_mitigation(doc, gap_analysis, mitigation_strategy)
