@@ -17,6 +17,7 @@ def run_final_render(task: dict) -> dict:
     job = repo.get_job(job_id)
     sections = repo.list_report_sections(job_id)
     qa_scores = repo.list_qa_scores(job_id)
+    logo_bytes = storage.get_bytes(job["logo_key"]) if job["logo_key"] else None
 
     docx_bytes = build_final_report_docx(
         company_name=company_name,
@@ -24,6 +25,7 @@ def run_final_render(task: dict) -> dict:
         qa_scores=qa_scores,
         gap_analysis=job["gap_analysis"],
         mitigation_strategy=job["mitigation_strategy"],
+        logo_bytes=logo_bytes,
     )
 
     object_key = job["output_key"] or f"reports/{job_id}/draft.docx"

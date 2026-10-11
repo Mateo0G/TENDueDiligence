@@ -102,6 +102,7 @@ class JobOut(BaseModel):
     vertical: str | None
     draft_approved_at: datetime | None
     dataroom_files: list[DataroomFileOut]
+    has_logo: bool
 
 
 def _require_job(job_id: str) -> dict:
@@ -163,6 +164,7 @@ def get_job(job_id: str):
         vertical=job["vertical"],
         draft_approved_at=job["draft_approved_at"],
         dataroom_files=[_to_file_out(f) for f in files],
+        has_logo=bool(job["logo_key"]),
     )
 
 
@@ -288,6 +290,25 @@ async def upload_pitch_deck(job_id: str, file: UploadFile):
     return _to_file_out(row)
 
 
+class LogoUploadResult(BaseModel):
+    uploaded: bool
+
+
+@app.post("/jobs/{job_id}/logo", response_model=LogoUploadResult)
+async def upload_logo(job_id: str, file: UploadFile):
+    """The client's own logo for the generated report's cover page (see
+    app/docx_builder.py's _build_cover_and_front_matter) -- optional, and
+    not dataroom content, so it gets no dataroom_files row and no
+    classification; just an object key on the job itself, mirroring
+    pitch_deck_key."""
+    _require_job(job_id)
+    data = await file.read()
+    object_key = f"logo/{job_id}/{uuid.uuid4()}-{file.filename}"
+    storage.put_bytes(object_key, data, content_type=file.content_type)
+    repo.set_job_logo_key(job_id, object_key)
+    return LogoUploadResult(uploaded=True)
+
+
 @app.post("/jobs/{job_id}/classify-vertical", response_model=VerticalResult)
 def classify_vertical(job_id: str):
     _require_job(job_id)
@@ -375,7 +396,8 @@ def get_draft_docx(job_id: str):
     sections = repo.list_report_sections(job_id)
     if not sections:
         raise HTTPException(status_code=404, detail="no sections drafted yet")
-    docx_bytes = build_report_docx(job["company_name"], sections)
+    logo_bytes = storage.get_bytes(job["logo_key"]) if job["logo_key"] else None
+    docx_bytes = build_report_docx(job["company_name"], sections, logo_bytes)
     return Response(
         content=docx_bytes,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",

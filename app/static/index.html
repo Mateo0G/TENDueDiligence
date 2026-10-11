@@ -295,6 +295,12 @@ async function renderJob() {
       <div class="toolbar">
         <button onclick="uploadPitchDeck()">Upload pitch deck</button>
       </div>
+      <h3>Company logo <span class="muted" style="text-transform:none;font-weight:400;">(optional)</span></h3>
+      <div class="muted" style="margin-bottom:6px;">${job.has_logo ? "Logo uploaded &mdash; shown on the report's cover page." : "Shown on the report's cover page, above the company name, if provided."}</div>
+      <input type="file" id="logo-input" accept="image/*">
+      <div class="toolbar">
+        <button onclick="uploadLogo()">${job.has_logo ? "Replace logo" : "Upload logo"}</button>
+      </div>
       <div class="toolbar">
         <button class="secondary" onclick="classifyVertical()" ${!hasFiles ? "disabled" : ""}>
           Classify vertical${job.vertical ? " (reclassify)" : ""}
@@ -542,6 +548,18 @@ async function uploadPitchDeck() {
   fd.append("file", input.files[0]);
   try {
     await api("POST", "/jobs/" + currentJobId + "/pitch-deck", fd, true);
+    input.value = "";
+    await renderJob();
+  } catch (e) { alert("Upload failed: " + e.message); }
+}
+
+async function uploadLogo() {
+  const input = document.getElementById("logo-input");
+  if (!input.files.length) { alert("Choose a logo image file."); return; }
+  const fd = new FormData();
+  fd.append("file", input.files[0]);
+  try {
+    await api("POST", "/jobs/" + currentJobId + "/logo", fd, true);
     input.value = "";
     await renderJob();
   } catch (e) { alert("Upload failed: " + e.message); }
