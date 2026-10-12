@@ -374,6 +374,8 @@ def start_stage2(job_id: str):
     process picks them up and runs the actual Claude calls -- this endpoint
     only enqueues, per the brief's request/response vs. worker split."""
     job = _require_job(job_id)
+    if repo.stage_already_started(job_id, pipeline.STAGE_DRAFTING):
+        raise HTTPException(status_code=409, detail="Stage 2 has already been started for this job")
     task_ids = pipeline.create_stage2_tasks(job_id, job["company_name"])
     return Stage2Result(task_ids=task_ids)
 
@@ -427,6 +429,8 @@ def start_stage3(job_id: str):
     """Creates the Stage 3 (compile draft) task, which depends on every
     Stage 2 task and, once it runs, moves the job to awaiting_review."""
     job = _require_job(job_id)
+    if repo.stage_already_started(job_id, pipeline.STAGE_COMPILE):
+        raise HTTPException(status_code=409, detail="Stage 3 has already been started for this job")
     task_id = pipeline.create_stage3_task(job_id, job["company_name"])
     return Stage3Result(task_id=task_id)
 
@@ -537,6 +541,8 @@ def start_stage4(job_id: str):
             status_code=409,
             detail="draft has not been approved yet -- call POST /jobs/{id}/approve-draft first",
         )
+    if repo.stage_already_started(job_id, pipeline.STAGE_QA):
+        raise HTTPException(status_code=409, detail="Stage 4 has already been started for this job")
     task_ids = pipeline.create_stage4_tasks(job_id, job["company_name"], job["vertical"])
     return Stage4Result(task_ids=task_ids)
 
@@ -584,6 +590,8 @@ def start_stage5(job_id: str):
             status_code=409,
             detail="Stage 4 has not produced a Report Card yet -- call POST /jobs/{id}/stage4 first",
         )
+    if repo.stage_already_started(job_id, pipeline.STAGE_GAP_MITIGATION):
+        raise HTTPException(status_code=409, detail="Stage 5 has already been started for this job")
     task_ids = pipeline.create_stage5_tasks(job_id, job["company_name"])
     return Stage5Result(task_ids=task_ids)
 
@@ -602,6 +610,8 @@ def start_stage6(job_id: str):
             status_code=409,
             detail="mitigation strategy has not been generated yet -- call POST /jobs/{id}/stage5 first",
         )
+    if repo.stage_already_started(job_id, pipeline.STAGE_FINAL_RENDER):
+        raise HTTPException(status_code=409, detail="Stage 6 has already been started for this job")
     task_id = pipeline.create_stage6_task(job_id, job["company_name"])
     return Stage6Result(task_id=task_id)
 

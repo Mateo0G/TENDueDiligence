@@ -218,6 +218,20 @@ def list_tasks_for_job(job_id) -> list[dict]:
             return cur.fetchall()
 
 
+def stage_already_started(job_id, stage: int) -> bool:
+    """Guard for every /jobs/{job_id}/stageN endpoint, checked before
+    creating that stage's tasks -- without it, starting an already-started
+    stage (a stale page that missed the first click succeeding, a
+    double-click, two tabs on the same job) hits the tasks table's
+    UNIQUE(job_id, task_key) constraint and 500s instead of failing
+    cleanly. One stage's tasks are always created in a single request, so
+    "any row at this stage" is equivalent to "already started"."""
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM tasks WHERE job_id=%s AND stage=%s LIMIT 1", (job_id, stage))
+            return cur.fetchone() is not None
+
+
 def list_jobs() -> list[dict]:
     with pool.connection() as conn:
         with conn.cursor(row_factory=dict_row) as cur:
