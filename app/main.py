@@ -62,8 +62,16 @@ def serve_ui():
     """The brief's non-goals call for "a simple polling-based status page",
     not a frontend framework -- this is one static file with vanilla JS,
     served directly by the same FastAPI app, no build step or separate
-    service."""
-    return FileResponse("app/static/index.html")
+    service.
+
+    no-cache (not no-store): FileResponse already sends an ETag, so this
+    doesn't disable caching, it just forces a conditional revalidation
+    request on every load instead of letting the browser skip asking
+    entirely -- without it, a browser's heuristic freshness (RFC 7234,
+    since no Cache-Control was sent at all) can serve a stale copy of this
+    page indefinitely after a deploy, which is exactly what happened here.
+    """
+    return FileResponse("app/static/index.html", headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/static/ten-capital-logo.png")
@@ -71,7 +79,7 @@ def serve_ten_logo():
     """The UI's own TEN Capital branding (header logo, favicon) -- a single
     named route rather than a full StaticFiles mount, matching serve_ui's
     FileResponse pattern above with no new dependency for one fixed asset."""
-    return FileResponse("app/static/ten-capital-logo.png")
+    return FileResponse("app/static/ten-capital-logo.png", headers={"Cache-Control": "no-cache"})
 
 
 class CreateJobRequest(BaseModel):
