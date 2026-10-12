@@ -225,6 +225,17 @@ def list_jobs() -> list[dict]:
             return cur.fetchall()
 
 
+def delete_job(job_id) -> bool:
+    """Deletes the job row; tasks, report_sections, qa_scores, and
+    dataroom_files all cascade (ON DELETE CASCADE, see alembic/versions).
+    Returns False if the job didn't exist. Doesn't touch R2 -- the caller
+    (app/main.py) deletes the job's stored objects first, since that needs
+    the row's data (object keys) while it still exists."""
+    with pool.connection() as conn:
+        cur = conn.execute("DELETE FROM jobs WHERE id=%s", (job_id,))
+        return cur.rowcount > 0
+
+
 def get_job(job_id) -> Optional[dict]:
     with pool.connection() as conn:
         with conn.cursor(row_factory=dict_row) as cur:
