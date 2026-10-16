@@ -28,15 +28,26 @@ _ZIP_MAX_NESTING = 5  # Google Drive's "download folder as zip" wraps each
 # bounded so a malicious/corrupt zip-of-zips can't recurse forever.
 
 
-def _iter_zip_entries(data: bytes, _prefix: str = "", _depth: int = 0):
+def _iter_zip_entries(zip_file_like, _prefix: str = "", _depth: int = 0):
     """Yields (internal_path, bytes) for every real file in a zip archive,
     skipping directories and OS/zip metadata cruft, and recursing into any
     entry that is itself a zip (Google Drive splits large folders into
     per-subfolder zips nested inside the top-level download). A corrupt
     outer zip raises BadZipFile -- the caller turns that into a 400, not a
     500; a corrupt or too-deeply-nested inner zip is yielded as-is instead,
-    so one bad nested archive doesn't fail the whole upload."""
-    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+    so one bad nested archive doesn't fail the whole upload.
+
+    zip_file_like is a seekable file object, not raw bytes -- the caller
+    passes the uploaded file's own spooled temp file for the top-level
+    call (confirmed against a real 245MB dataroom zip: reading the whole
+    upload into one bytes blob just to open it, on top of this generator's
+    caller previously materializing every extracted entry into a list
+    before uploading any of them, pushed peak memory well past what this
+    service has and it was OOM-killed -- no app-level log line, just a
+    502 at the edge). A nested zip is small enough (one subfolder, not the
+    whole dataroom) that io.BytesIO over its already-read bytes is fine.
+    """
+    with zipfile.ZipFile(zip_file_like) as zf:
         for info in zf.infolist():
             if info.is_dir():
                 continue
@@ -48,7 +59,11 @@ def _iter_zip_entries(data: bytes, _prefix: str = "", _depth: int = 0):
             entry_data = zf.read(info)
             if basename.lower().endswith(".zip") and _depth < _ZIP_MAX_NESTING:
                 try:
-                    yield from _iter_zip_entries(entry_data, f"{full_path.rsplit('/', 1)[0]}/" if "/" in full_path else "", _depth + 1)
+                    yield from _iter_zip_entries(
+                        io.BytesIO(entry_data),
+                        f"{full_path.rsplit('/', 1)[0]}/" if "/" in full_path else "",
+                        _depth + 1,
+                    )
                     continue
                 except zipfile.BadZipFile:
                     pass
@@ -290,17 +305,23 @@ async def upload_dataroom_files(job_id: str, files: list[UploadFile]):
     _require_job(job_id)
     uploaded = []
     for f in files:
-        data = await f.read()
         if f.filename.lower().endswith(".zip"):
+            # Stream straight from the upload's own spooled temp file and
+            # store each entry as it's yielded, instead of reading the
+            # whole upload into memory and then materializing every
+            # extracted file into a list before storing any of them --
+            # peak memory now tracks the largest single file, not the
+            # whole (possibly multi-hundred-MB) dataroom at once.
+            f.file.seek(0)
             try:
-                entries = list(_iter_zip_entries(data))
+                for internal_path, entry_data in _iter_zip_entries(f.file):
+                    basename = internal_path.rsplit("/", 1)[-1]
+                    content_type = mimetypes.guess_type(basename)[0]
+                    uploaded.append(_store_dataroom_file(job_id, internal_path, basename, entry_data, content_type))
             except zipfile.BadZipFile:
                 raise HTTPException(status_code=400, detail=f"{f.filename} is not a valid zip file")
-            for internal_path, entry_data in entries:
-                basename = internal_path.rsplit("/", 1)[-1]
-                content_type = mimetypes.guess_type(basename)[0]
-                uploaded.append(_store_dataroom_file(job_id, internal_path, basename, entry_data, content_type))
         else:
+            data = await f.read()
             uploaded.append(_store_dataroom_file(job_id, f.filename, f.filename, data, f.content_type))
     return UploadResult(uploaded=uploaded)
 
