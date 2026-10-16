@@ -12,7 +12,7 @@ from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
-from app import classify, claude_client, pipeline, repo, storage
+from app import classify, claude_client, pdf_convert, pipeline, repo, storage
 from app.docx_builder import build_report_docx
 from app.models import ContentBlock
 
@@ -475,6 +475,29 @@ def get_draft_docx(job_id: str):
     )
 
 
+@app.get("/jobs/{job_id}/draft.pdf")
+def get_draft_pdf(job_id: str):
+    """Same live re-render as /draft.docx, piped through LibreOffice
+    (app/pdf_convert.py) -- converted on every request rather than cached,
+    since the draft can change between one request and the next via the
+    section-edit checkpoint this endpoint already re-renders for."""
+    job = _require_job(job_id)
+    sections = repo.list_report_sections(job_id)
+    if not sections:
+        raise HTTPException(status_code=404, detail="no sections drafted yet")
+    logo_bytes = storage.get_bytes(job["logo_key"]) if job["logo_key"] else None
+    docx_bytes = build_report_docx(job["company_name"], sections, logo_bytes)
+    try:
+        pdf_bytes = pdf_convert.convert_docx_to_pdf(docx_bytes)
+    except pdf_convert.PdfConversionError as exc:
+        raise HTTPException(status_code=502, detail=f"PDF conversion failed: {exc}")
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{job["company_name"]}_draft.pdf"'},
+    )
+
+
 class UpdateSectionRequest(BaseModel):
     title: str
     blocks: list[ContentBlock]
@@ -651,6 +674,27 @@ def get_final_report_docx(job_id: str):
         content=docx_bytes,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={"Content-Disposition": f'attachment; filename="{job["company_name"]}_due_diligence_report.docx"'},
+    )
+
+
+@app.get("/jobs/{job_id}/report.pdf")
+def get_final_report_pdf(job_id: str):
+    """Serves the final report's PDF, rendered once by Stage 6 (see
+    app/tasks/final_render.py) alongside the docx rather than converted on
+    every request -- the final report is immutable once rendered, unlike
+    /draft.pdf which re-converts live because the draft can still change."""
+    job = _require_job(job_id)
+    if job["status"] != "completed" or not job["output_key"]:
+        raise HTTPException(status_code=409, detail="final report has not been rendered yet")
+    pdf_key = pdf_convert.derive_pdf_key(job["output_key"])
+    try:
+        pdf_bytes = storage.get_bytes(pdf_key)
+    except Exception:
+        raise HTTPException(status_code=404, detail="final report PDF was not found in storage")
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{job["company_name"]}_due_diligence_report.pdf"'},
     )
 
 

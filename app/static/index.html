@@ -340,7 +340,9 @@ async function renderJob() {
         </div>
         <div>
           <a class="docx-link" href="/jobs/${currentJobId}/draft.docx" target="_blank">Preview draft (.docx)</a>
-          ${job.status === "completed" ? `<br><a class="docx-link" href="/jobs/${currentJobId}/report.docx" target="_blank">Download final report</a>` : ""}
+          &middot;
+          <a class="docx-link" href="/jobs/${currentJobId}/draft.pdf" target="_blank">(.pdf)</a>
+          ${job.status === "completed" ? `<br><a class="docx-link" href="/jobs/${currentJobId}/report.docx" target="_blank">Download final report (.docx)</a> &middot; <a class="docx-link" href="/jobs/${currentJobId}/report.pdf" target="_blank">(.pdf)</a>` : ""}
         </div>
       </div>
     </div>
