@@ -3,13 +3,9 @@ mitigation content into the document and re-render the final docx, per the
 brief's Stage 6 description. Reuses jobs.output_key (the same key Stage 3's
 compile_draft wrote to) -- the final docx simply overwrites the draft.
 """
-import logging
-
-from app import pdf_convert, repo, storage
+from app import repo, storage
 from app.docx_builder import build_final_report_docx
 from app.tasks.registry import register
-
-log = logging.getLogger("worker")
 
 
 @register("final_render")
@@ -39,24 +35,7 @@ def run_final_render(task: dict) -> dict:
         content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     )
 
-    # Best-effort: a PDF conversion hiccup shouldn't fail Stage 6 and block
-    # the job from completing -- the docx is the proven, long-standing
-    # deliverable; GET /jobs/{id}/report.pdf 404s cleanly if this didn't
-    # produce one, rather than the whole job getting stuck.
-    pdf_rendered = False
-    try:
-        pdf_bytes = pdf_convert.convert_docx_to_pdf(docx_bytes)
-        storage.put_bytes(pdf_convert.derive_pdf_key(object_key), pdf_bytes, content_type="application/pdf")
-        pdf_rendered = True
-    except Exception:
-        log.exception("final_render: PDF conversion failed for job %s, docx is still available", job_id)
-
     repo.set_job_output_key(job_id, object_key)
     repo.set_job_status(job_id, "completed")
 
-    return {
-        "output_key": object_key,
-        "section_count": len(sections),
-        "qa_score_count": len(qa_scores),
-        "pdf_rendered": pdf_rendered,
-    }
+    return {"output_key": object_key, "section_count": len(sections), "qa_score_count": len(qa_scores)}
