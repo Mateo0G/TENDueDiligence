@@ -154,6 +154,32 @@
   a.docx-link:hover { text-decoration: underline; }
   .muted { color: var(--text-muted); }
   .flex-between { display: flex; justify-content: space-between; align-items: center; }
+  /* A real dataroom is 50+ files -- uncapped, the list pushes the upload
+     controls and their status/confirmation far below the fold. */
+  #file-list {
+    max-height: 300px; overflow-y: auto;
+    border: 1px solid var(--card-border); border-radius: 8px; padding: 4px 10px; margin-bottom: 6px;
+  }
+  .file-list-count { font-size: 11px; color: var(--text-muted); font-family: var(--font-mono); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 6px; }
+  .selection-note { font-size: 12px; color: var(--text-secondary); margin-top: 6px; font-family: var(--font-mono); }
+  .upload-status {
+    margin-top: 10px; padding: 12px 14px; border-radius: 8px; font-size: 13px;
+    border: 1px solid rgba(63, 193, 224, 0.35); background: rgba(63, 193, 224, 0.07);
+  }
+  .upload-status.done { border-color: rgba(61, 220, 151, 0.4); background: rgba(61, 220, 151, 0.08); }
+  .upload-status.error { border-color: var(--error-border); background: var(--error-bg); color: var(--error-text); }
+  .upload-status .row { display: flex; align-items: center; gap: 10px; }
+  .upload-status .title { font-weight: 600; color: var(--text-primary); }
+  .upload-status.error .title { color: var(--error-text); }
+  .upload-status .detail { color: var(--text-muted); font-size: 12px; margin-top: 6px; line-height: 1.5; }
+  .upload-status.error .detail { color: var(--error-text); }
+  .upload-status .checkmark { color: var(--accent-green); font-weight: 700; font-size: 15px; }
+  .spinner {
+    width: 16px; height: 16px; flex-shrink: 0; border-radius: 50%;
+    border: 2px solid rgba(255, 255, 255, 0.15); border-top-color: var(--accent-teal);
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
 </style>
 </head>
 <body>
@@ -347,32 +373,41 @@ async function renderJob() {
 
     <div class="card" id="upload-card">
       <h2>1. Dataroom &amp; Pitch Deck</h2>
-      <div id="file-list">
-        ${files.length === 0 ? '<div class="empty">No files uploaded yet.</div>' : files.map(f => `
-          <div class="file-row">
-            <span>${escapeHtml(f.original_filename)} ${f.file_kind === "pitch_deck" ? "<em>(pitch deck)</em>" : ""}</span>
-            <span class="cat">${f.category || "uncategorized"}</span>
-          </div>
-        `).join("")}
-      </div>
+      ${files.length === 0 ? `<div id="file-list-empty" class="empty">${emptyFileListText()}</div>` : `
+        <div class="file-list-count">${files.length} file${files.length === 1 ? "" : "s"} received${files.length > 8 ? " &middot; scroll to see all" : ""}</div>
+        <div id="file-list">
+          ${files.map(f => `
+            <div class="file-row">
+              <span>${escapeHtml(f.original_filename)} ${f.file_kind === "pitch_deck" ? "<em>(pitch deck)</em>" : ""}</span>
+              <span class="cat">${f.category || "uncategorized"}</span>
+            </div>
+          `).join("")}
+        </div>
+      `}
       <h3>Upload dataroom files</h3>
       <div class="muted" style="margin-bottom:6px;">Accepts a .zip of the whole dataroom, individual files, or a mix of both &mdash; a zip is extracted and every file inside it is classified individually.</div>
-      <input type="file" id="dataroom-input" multiple>
+      <input type="file" id="dataroom-input" multiple onchange="onFileChosen('dataroom', this)" ${uploadBusy("dataroom") ? "disabled" : ""}>
+      <div id="selection-dataroom" class="selection-note"></div>
       <div class="toolbar">
-        <button onclick="uploadDataroom()">Upload dataroom files</button>
+        ${uploadButtonHtml("dataroom", "uploadDataroom()", "Upload dataroom files")}
       </div>
+      <div id="upload-status-dataroom">${uploadStatusHtml("dataroom")}</div>
       <h3>Upload pitch deck <span class="muted" style="text-transform:none;font-weight:400;">(optional)</span></h3>
       <div class="muted" style="margin-bottom:6px;">Skip this if the pitch deck is already included in your dataroom zip.</div>
-      <input type="file" id="pitchdeck-input">
+      <input type="file" id="pitchdeck-input" onchange="onFileChosen('pitchdeck', this)" ${uploadBusy("pitchdeck") ? "disabled" : ""}>
+      <div id="selection-pitchdeck" class="selection-note"></div>
       <div class="toolbar">
-        <button onclick="uploadPitchDeck()">Upload pitch deck</button>
+        ${uploadButtonHtml("pitchdeck", "uploadPitchDeck()", "Upload pitch deck")}
       </div>
+      <div id="upload-status-pitchdeck">${uploadStatusHtml("pitchdeck")}</div>
       <h3>Company logo <span class="muted" style="text-transform:none;font-weight:400;">(optional)</span></h3>
       <div class="muted" style="margin-bottom:6px;">${job.has_logo ? "Logo uploaded &mdash; shown on the report's cover page." : "Shown on the report's cover page, above the company name, if provided."}</div>
-      <input type="file" id="logo-input" accept="image/*">
+      <input type="file" id="logo-input" accept="image/*" onchange="onFileChosen('logo', this)" ${uploadBusy("logo") ? "disabled" : ""}>
+      <div id="selection-logo" class="selection-note"></div>
       <div class="toolbar">
-        <button onclick="uploadLogo()">${job.has_logo ? "Replace logo" : "Upload logo"}</button>
+        ${uploadButtonHtml("logo", "uploadLogo()", job.has_logo ? "Replace logo" : "Upload logo")}
       </div>
+      <div id="upload-status-logo">${uploadStatusHtml("logo")}</div>
       <div class="toolbar">
         <button class="secondary" onclick="classifyVertical()" ${!hasFiles ? "disabled" : ""}>
           Classify vertical${job.vertical ? " (reclassify)" : ""}
@@ -601,40 +636,258 @@ async function renderGapAnalysis() {
   `;
 }
 
+// Upload state lives outside the DOM because renderJob() rebuilds the whole
+// panel on every poll tick -- each status block is re-rendered from here,
+// so progress survives a re-render instead of being wiped mid-upload.
+const uploads = {};
+
+function uploadBusy(kind) {
+  const u = uploads[kind];
+  return !!u && u.jobId === currentJobId && (u.phase === "uploading" || u.phase === "processing");
+}
+
+function anyUploadActive() {
+  return Object.values(uploads).some(u => u.phase === "uploading" || u.phase === "processing");
+}
+
+window.addEventListener("beforeunload", e => {
+  if (anyUploadActive()) { e.preventDefault(); e.returnValue = ""; }
+});
+
+function formatBytes(n) {
+  if (!n) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+  return `${n.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
+function formatElapsed(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  const m = Math.floor(s / 60);
+  return m ? `${m}m ${String(s % 60).padStart(2, "0")}s` : `${s}s`;
+}
+
+function emptyFileListText() {
+  return uploadBusy("dataroom")
+    ? "Your dataroom is on its way &mdash; files will be listed here once the server has processed them."
+    : "No files uploaded yet.";
+}
+
+function uploadButtonHtml(kind, onclick, label) {
+  const busy = uploadBusy(kind);
+  return `<button id="upload-btn-${kind}" data-label="${escapeAttr2(label)}" onclick="${onclick}" ${busy ? "disabled" : ""}>${busy ? "Uploading&hellip;" : escapeHtml(label)}</button>`;
+}
+
+function uploadStatusHtml(kind) {
+  const u = uploads[kind];
+  if (!u || u.jobId !== currentJobId) return "";
+  const now = Date.now();
+  if (u.phase === "uploading") {
+    const pct = u.total ? Math.min(100, Math.floor(u.loaded / u.total * 100)) : 0;
+    const elapsed = now - u.startedAt;
+    let eta = "";
+    if (u.loaded > 0 && u.total && pct < 100 && elapsed > 3000) {
+      eta = ` &middot; about ${formatElapsed((u.total - u.loaded) / (u.loaded / elapsed))} left`;
+    }
+    return `<div class="upload-status">
+      <div class="row"><div class="spinner"></div><div class="title">Step 1 of 2 &mdash; Uploading ${escapeHtml(u.label)}: ${pct}%</div></div>
+      <div class="progress-row"><div class="progress-bar"><div style="width:${pct}%"></div></div></div>
+      <div class="detail">${formatBytes(u.loaded)} of ${formatBytes(u.total)} sent${eta}. Keep this tab open until it finishes.</div>
+    </div>`;
+  }
+  if (u.phase === "processing") {
+    return `<div class="upload-status">
+      <div class="row"><div class="spinner"></div><div class="title">Step 2 of 2 &mdash; ${u.processingTitle}</div></div>
+      <div class="detail">${u.processingDetail} Elapsed: ${formatElapsed(now - u.processingStartedAt)}. Keep this tab open.</div>
+    </div>`;
+  }
+  if (u.phase === "done") {
+    return `<div class="upload-status done">
+      <div class="row"><span class="checkmark">&#10003;</span><div class="title">${u.doneTitle}</div></div>
+      ${u.doneDetail ? `<div class="detail">${u.doneDetail}</div>` : ""}
+    </div>`;
+  }
+  if (u.phase === "error") {
+    return `<div class="upload-status error"><div class="title">Upload failed</div><div class="detail">${escapeHtml(u.error)}</div></div>`;
+  }
+  return "";
+}
+
+// Patches just this upload's status block, button and input in place --
+// called on every progress event and once a second for the elapsed timer,
+// without the cost (or the flicker) of a full renderJob().
+function refreshUploadUi(kind) {
+  const el = document.getElementById("upload-status-" + kind);
+  if (el) el.innerHTML = uploadStatusHtml(kind);
+  const busy = uploadBusy(kind);
+  const btn = document.getElementById("upload-btn-" + kind);
+  if (btn) { btn.disabled = busy; btn.innerHTML = busy ? "Uploading&hellip;" : escapeHtml(btn.dataset.label); }
+  const input = document.getElementById(kind + "-input");
+  if (input) input.disabled = busy;
+  const empty = document.getElementById("file-list-empty");
+  if (empty && kind === "dataroom") empty.innerHTML = emptyFileListText();
+}
+
+function onFileChosen(kind, input) {
+  if (!uploadBusy(kind)) { delete uploads[kind]; refreshUploadUi(kind); }
+  const el = document.getElementById("selection-" + kind);
+  if (!el) return;
+  if (!input.files.length) { el.textContent = ""; return; }
+  const files = [...input.files];
+  const total = files.reduce((s, f) => s + f.size, 0);
+  const name = files.length === 1 ? files[0].name : `${files.length} files`;
+  const zip = files.some(f => f.name.toLowerCase().endsWith(".zip"));
+  el.textContent = `Selected: ${name} (${formatBytes(total)})${zip ? " — zip will be extracted on the server" : ""}. Click upload to send it.`;
+}
+
+// XMLHttpRequest rather than fetch(): fetch has no upload-progress events,
+// which is exactly the feedback a multi-hundred-MB dataroom zip needs.
+// Two phases: "uploading" while bytes are in flight, then "processing"
+// once they've all arrived and the server is extracting/classifying/storing
+// them -- the request only resolves after that second phase finishes.
+function uploadWithProgress(kind, path, formData, label, totalBytes, processing) {
+  const u = uploads[kind] = {
+    jobId: currentJobId, phase: "uploading", label,
+    loaded: 0, total: totalBytes, startedAt: Date.now(),
+    processingTitle: processing.title, processingDetail: processing.detail,
+  };
+  const ticker = setInterval(() => refreshUploadUi(kind), 1000);
+  refreshUploadUi(kind);
+
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", API + path);
+    xhr.upload.onprogress = e => {
+      if (e.lengthComputable) { u.loaded = e.loaded; u.total = e.total; }
+      refreshUploadUi(kind);
+    };
+    xhr.upload.onload = () => {
+      u.loaded = u.total;
+      u.phase = "processing";
+      u.processingStartedAt = Date.now();
+      refreshUploadUi(kind);
+    };
+    const fail = message => {
+      clearInterval(ticker);
+      u.phase = "error";
+      u.error = message;
+      refreshUploadUi(kind);
+      reject(new Error(message));
+    };
+    xhr.onload = () => {
+      let body = null;
+      try { body = JSON.parse(xhr.responseText); } catch (e) {}
+      if (xhr.status >= 200 && xhr.status < 300) {
+        clearInterval(ticker);
+        u.phase = "done";
+        u.finishedAt = Date.now();
+        resolve({ body, u });
+      } else if (body && body.detail) {
+        fail(String(body.detail));
+      } else if (xhr.status === 502 || xhr.status === 504) {
+        fail(`The server dropped the connection (HTTP ${xhr.status}) while handling the upload. Some files may have been saved before it stopped — check the file list above before retrying.`);
+      } else {
+        fail(`The server returned HTTP ${xhr.status}.`);
+      }
+    };
+    xhr.onerror = () => fail("Network error — the upload didn't reach the server, or the connection dropped partway through. Check your connection and try again.");
+    xhr.send(formData);
+  });
+}
+
+function summarizeCategories(files) {
+  const counts = {};
+  let pitchDecks = 0, uncategorized = 0;
+  for (const f of files) {
+    if (f.file_kind === "pitch_deck") { pitchDecks++; continue; }
+    if (!f.category) { uncategorized++; continue; }
+    counts[f.category] = (counts[f.category] || 0) + 1;
+  }
+  const parts = Object.entries(counts)
+    .sort((a, b) => b[1] - a[1])
+    .map(([cat, n]) => `${n} ${cat.replace(/_/g, " ")}`);
+  if (pitchDecks) parts.push(`${pitchDecks} pitch deck`);
+  let html = escapeHtml(parts.join(" · "));
+  if (uncategorized) {
+    html += `${html ? " · " : ""}<span style="color:var(--accent-to);">${uncategorized} uncategorized</span>`;
+  }
+  return html;
+}
+
 async function uploadDataroom() {
   const input = document.getElementById("dataroom-input");
   if (!input.files.length) { alert("Choose at least one file."); return; }
+  const files = [...input.files];
   const fd = new FormData();
-  for (const f of input.files) fd.append("files", f);
+  for (const f of files) fd.append("files", f);
+  const totalBytes = files.reduce((s, f) => s + f.size, 0);
+  const hasZip = files.some(f => f.name.toLowerCase().endsWith(".zip"));
+  const label = files.length === 1 ? files[0].name : `${files.length} files`;
+  document.getElementById("selection-dataroom").textContent = "";
+
+  let result;
   try {
-    await api("POST", "/jobs/" + currentJobId + "/dataroom", fd, true);
-    input.value = "";
-    await renderJob();
-  } catch (e) { alert("Upload failed: " + e.message); }
+    result = await uploadWithProgress("dataroom", "/jobs/" + currentJobId + "/dataroom", fd, label, totalBytes, {
+      title: hasZip
+        ? "Received &mdash; extracting and classifying the dataroom&hellip;"
+        : "Received &mdash; storing and classifying files&hellip;",
+      detail: hasZip
+        ? "The server is unpacking the zip (and any zips nested inside it), storing every file, and sorting each into a dataroom category. Large datarooms can take a few minutes."
+        : "The server is storing each file and sorting it into a dataroom category.",
+    });
+  } catch (e) { return; }
+
+  const { body, u } = result;
+  const received = (body && body.uploaded) || [];
+  if (received.length === 0) {
+    u.phase = "error";
+    u.error = "The upload arrived, but no usable files were found in it (an empty zip, or only folders and system files).";
+  } else {
+    u.doneTitle = `Dataroom received &mdash; ${received.length} file${received.length === 1 ? "" : "s"} processed in ${formatElapsed(u.finishedAt - u.startedAt)}`;
+    u.doneDetail = summarizeCategories(received);
+  }
+  await renderJob();
 }
 
 async function uploadPitchDeck() {
   const input = document.getElementById("pitchdeck-input");
   if (!input.files.length) { alert("Choose a pitch deck file."); return; }
+  const file = input.files[0];
   const fd = new FormData();
-  fd.append("file", input.files[0]);
+  fd.append("file", file);
+  document.getElementById("selection-pitchdeck").textContent = "";
+
+  let result;
   try {
-    await api("POST", "/jobs/" + currentJobId + "/pitch-deck", fd, true);
-    input.value = "";
-    await renderJob();
-  } catch (e) { alert("Upload failed: " + e.message); }
+    result = await uploadWithProgress("pitchdeck", "/jobs/" + currentJobId + "/pitch-deck", fd, file.name, file.size, {
+      title: "Received &mdash; storing the pitch deck&hellip;",
+      detail: "",
+    });
+  } catch (e) { return; }
+  result.u.doneTitle = `Pitch deck received &mdash; ${escapeHtml(file.name)}`;
+  result.u.doneDetail = "It will be used as source material in every drafted section.";
+  await renderJob();
 }
 
 async function uploadLogo() {
   const input = document.getElementById("logo-input");
   if (!input.files.length) { alert("Choose a logo image file."); return; }
+  const file = input.files[0];
   const fd = new FormData();
-  fd.append("file", input.files[0]);
+  fd.append("file", file);
+  document.getElementById("selection-logo").textContent = "";
+
+  let result;
   try {
-    await api("POST", "/jobs/" + currentJobId + "/logo", fd, true);
-    input.value = "";
-    await renderJob();
-  } catch (e) { alert("Upload failed: " + e.message); }
+    result = await uploadWithProgress("logo", "/jobs/" + currentJobId + "/logo", fd, file.name, file.size, {
+      title: "Received &mdash; storing the logo&hellip;",
+      detail: "",
+    });
+  } catch (e) { return; }
+  result.u.doneTitle = `Logo received &mdash; ${escapeHtml(file.name)}`;
+  result.u.doneDetail = "It will appear on the report's cover page.";
+  await renderJob();
 }
 
 async function classifyVertical() {
