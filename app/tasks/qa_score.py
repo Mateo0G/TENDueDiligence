@@ -3,7 +3,7 @@ master validation check against the compiled report + dataroom, per
 app/qa_spec.py. Input-gathering and persistence are shared with
 app/batch_runner.py's Batch API path -- see app/pipeline.py.
 """
-from app import pipeline
+from app import evidence, pipeline
 from app.claude_client import score_assessment
 from app.qa_spec import (
     DD_ASSESSMENT_SPECS,
@@ -25,7 +25,7 @@ def run_qa_score(task: dict) -> dict:
     spec = _SPEC_BY_TASK_KEY[payload["task_key"]]
 
     report_text = pipeline.render_full_report_text(job_id)
-    dataroom_text = pipeline.full_dataroom_text(job_id)
+    dataroom_text = evidence.qa_evidence(job_id)
 
     output = score_assessment(spec, company_name, report_text, dataroom_text)
     pipeline.persist_qa_output(job_id, spec, output, task["id"])

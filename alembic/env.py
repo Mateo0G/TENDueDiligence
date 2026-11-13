@@ -16,7 +16,10 @@ config = context.config
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers=False: the web service also runs migrations
+    # in-process at startup (app/main.py), where the default would silence
+    # uvicorn's already-configured loggers.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # No ORM models -- migrations are raw SQL (op.execute), so there is no
 # metadata object for autogenerate to diff against.
@@ -71,6 +74,8 @@ def run_migrations_online() -> None:
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        # Fail fast rather than hang web startup on an unreachable database.
+        connect_args={"connect_timeout": 15},
     )
 
     with connectable.connect() as connection:

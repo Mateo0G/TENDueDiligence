@@ -404,18 +404,49 @@ def upsert_report_section(
     order_index: int,
     blocks: list[dict],
     source_task_id,
+    heading_level: int = 1,
+    meta: Optional[dict] = None,
 ) -> str:
     with pool.connection() as conn:
         row = conn.execute(
-            "INSERT INTO report_sections (job_id, section_key, title, order_index, content, source_task_id) "
-            "VALUES (%s, %s, %s, %s, %s, %s) "
+            "INSERT INTO report_sections "
+            "(job_id, section_key, title, order_index, content, source_task_id, heading_level, meta) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
             "ON CONFLICT (job_id, section_key) DO UPDATE SET "
             "title=EXCLUDED.title, order_index=EXCLUDED.order_index, content=EXCLUDED.content, "
-            "source_task_id=EXCLUDED.source_task_id, updated_at=now() "
+            "source_task_id=EXCLUDED.source_task_id, heading_level=EXCLUDED.heading_level, "
+            "meta=EXCLUDED.meta, updated_at=now() "
             "RETURNING id",
-            (job_id, section_key, title, order_index, Json(blocks), source_task_id),
+            (job_id, section_key, title, order_index, Json(blocks), source_task_id, heading_level, Json(meta or {})),
         ).fetchone()
         return str(row[0])
+
+
+def set_file_digest(file_id, digest: dict) -> None:
+    with pool.connection() as conn:
+        conn.execute("UPDATE dataroom_files SET digest=%s WHERE id=%s", (Json(digest), file_id))
+
+
+def get_dataroom_file(file_id) -> Optional[dict]:
+    with pool.connection() as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute("SELECT * FROM dataroom_files WHERE id=%s", (file_id,))
+            return cur.fetchone()
+
+
+def set_job_key_facts(job_id, key_facts: dict) -> None:
+    with pool.connection() as conn:
+        conn.execute(
+            "UPDATE jobs SET key_facts=%s, updated_at=now() WHERE id=%s", (Json(key_facts), job_id)
+        )
+
+
+def existing_task_keys(job_id) -> dict[str, str]:
+    """task_key -> task id, for every task this job already has."""
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT task_key, id FROM tasks WHERE job_id=%s", (job_id,))
+            return {row[0]: str(row[1]) for row in cur.fetchall()}
 
 
 def get_report_section(job_id, section_key: str) -> Optional[dict]:

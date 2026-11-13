@@ -132,7 +132,13 @@
   table.data th { color: var(--text-muted); font-weight: 600; font-size: 11px; text-transform: uppercase; font-family: var(--font-mono); }
   .file-row { display: flex; justify-content: space-between; padding: 5px 0; font-size: 13px; border-bottom: 1px solid var(--card-border); }
   .file-row:last-child { border-bottom: none; }
-  .file-row .cat { font-size: 11px; color: var(--text-muted); }
+  .file-row .cat { font-size: 11px; color: var(--text-muted); text-align: right; }
+  .file-row .cat.read { color: #4fb3bf; }
+  .file-row .cat.warn { color: #e0a84f; }
+  .section-item.level-2 { margin-left: 22px; }
+  .section-item.level-1 .head span:first-child { font-weight: 700; }
+  .block-editor .block-sub { display: flex; gap: 8px; align-items: center; margin-bottom: 4px; font-size: 12px; color: var(--text-muted); }
+  .block-editor .block-sub input[type=text] { flex: 1; }
   .section-item { border: 1px solid var(--card-border); border-radius: 8px; margin-bottom: 8px; overflow: hidden; }
   .section-item .head {
     display: flex; justify-content: space-between; align-items: center; padding: 9px 12px;
@@ -334,6 +340,8 @@ async function renderJob() {
   const prevQaBody = document.getElementById("qa-body")?.innerHTML;
   const prevGapBody = document.getElementById("gap-body")?.innerHTML;
 
+  const digests = taskCounts(tasks, "digest_document");
+  const keyFacts = taskCounts(tasks, "key_facts");
   const draft = taskCounts(tasks, "draft_section");
   const compile = taskCounts(tasks, "compile_draft");
   const qa = taskCounts(tasks, "qa_score");
@@ -344,7 +352,8 @@ async function renderJob() {
 
   const hasFiles = files.some(f => f.file_kind === "dataroom");
   const stage2Started = draft.total > 0;
-  const stage2Done = stage2Started && draft.done === draft.total && draft.failed === 0;
+  const stage2Done = stage2Started && draft.done === draft.total && draft.failed === 0 && keyFacts.done === keyFacts.total;
+  const digestsRunning = digests.total > 0 && digests.done + digests.failed < digests.total;
   const stage3Started = compile.total > 0;
   const stage3Done = job.status === "awaiting_review" || job.status === "completed";
   const approved = !!job.draft_approved_at;
@@ -379,7 +388,7 @@ async function renderJob() {
           ${files.map(f => `
             <div class="file-row">
               <span>${escapeHtml(f.original_filename)} ${f.file_kind === "pitch_deck" ? "<em>(pitch deck)</em>" : ""}</span>
-              <span class="cat">${f.category || "uncategorized"}</span>
+              ${fileStatusHtml(f, tasks)}
             </div>
           `).join("")}
         </div>
@@ -427,8 +436,14 @@ async function renderJob() {
       ` : ""}
 
       <div class="stage-row">
-        <div class="title">Stage 2 &mdash; Draft sections</div>
-        <div class="hint">${draft.total ? `${draft.done}/${draft.total} drafted${draft.failed ? `, ${draft.failed} failed` : ""}` : "not started"}</div>
+        <div class="title">Read documents</div>
+        <div class="hint">${digests.total ? `${digests.done}/${digests.total} documents read${digests.failed ? `, ${digests.failed} failed` : ""}${digestsRunning ? " &middot; runs automatically after upload" : ""}` : "starts automatically when files are uploaded"}</div>
+      </div>
+      ${digests.total ? `<div class="progress-row"><div class="progress-bar"><div style="width:${(digests.done/digests.total*100)||0}%"></div></div></div>` : ""}
+
+      <div class="stage-row">
+        <div class="title">Stage 2 &mdash; Key facts &amp; draft reports</div>
+        <div class="hint">${stage2HintText(digests, keyFacts, draft)}</div>
         <button onclick="runStage('stage2')" ${!hasFiles || stage2Started ? "disabled" : ""}>Start</button>
       </div>
       ${draft.total ? `<div class="progress-row"><div class="progress-bar"><div style="width:${(draft.done/draft.total*100)||0}%"></div></div></div>` : ""}
@@ -482,12 +497,40 @@ async function renderJob() {
   // nothing on the server is changing anyway.
   if (pollTimer) clearTimeout(pollTimer);
   const anyInProgress =
+    digestsRunning ||
     (stage2Started && !stage2Done) ||
     (stage3Started && !stage3Done) ||
     (stage4Started && !stage4Done) ||
     (stage5Started && !stage5Done) ||
     (stage6Started && !stage6Done);
   if (anyInProgress) pollTimer = setTimeout(renderJob, 4000);
+}
+
+function stage2HintText(digests, keyFacts, draft) {
+  if (!draft.total) return "not started";
+  if (digests.done + digests.failed < digests.total) return `waiting for documents to be read (${digests.done}/${digests.total})`;
+  if (keyFacts.done < keyFacts.total) return keyFacts.failed ? "key facts sheet failed" : "building the key facts sheet...";
+  return `${draft.done}/${draft.total} report parts drafted${draft.failed ? `, ${draft.failed} failed` : ""}`;
+}
+
+const TAG_LABELS = {
+  commercial: "commercial", financial: "financial", deal_terms: "deal terms", corporate: "corporate",
+  contracts: "contracts", team: "team", ip: "IP", science_tech: "science/tech", manufacturing: "manufacturing",
+  regulatory: "regulatory", competition: "competition", exit: "exit",
+};
+
+function fileStatusHtml(f, tasks) {
+  if (f.digest_status === "unreadable") {
+    return `<span class="cat warn" title="Could not be read automatically -- review it manually">unreadable</span>`;
+  }
+  if (f.digest_status) {
+    const tags = (f.tags || []).map(t => TAG_LABELS[t] || t).join(", ");
+    const how = f.digest_status === "read_visually" ? "read (scanned)" : "read";
+    return `<span class="cat read" title="${escapeAttr2(tags)}">${how}${tags ? " &middot; " + escapeHtml(tags) : ""}</span>`;
+  }
+  const t = tasks.find(t => t.task_key === "digest:" + f.id);
+  const state = !t ? (f.category || "uncategorized") : (t.status === "running" ? "reading..." : t.status === "failed" ? "read failed" : "queued to read");
+  return `<span class="cat">${escapeHtml(state)}</span>`;
 }
 
 function renderReviewSection(job, prevSectionsList) {
@@ -504,7 +547,7 @@ async function renderSectionsList() {
   if (!el) return;
   const sections = await api("GET", "/jobs/" + currentJobId + "/sections");
   el.innerHTML = sections.map(s => `
-    <div class="section-item ${openSections.has(s.section_key) ? 'open' : ''}" id="sec-${cssId(s.section_key)}">
+    <div class="section-item level-${s.heading_level || 1} ${openSections.has(s.section_key) ? 'open' : ''}" id="sec-${cssId(s.section_key)}">
       <div class="head" onclick="toggleSection('${escapeAttr(s.section_key)}')">
         <span>${escapeHtml(s.title)}</span>
         <span class="muted">${s.content.length} block(s)</span>
@@ -536,54 +579,83 @@ function sectionEditorHtml(s) {
 function escapeAttr2(s) { return escapeHtml(s).replace(/"/g, "&quot;"); }
 
 function blockEditorHtml(block, i) {
+  // Every editor keeps the block's original JSON, so fields this editor
+  // doesn't expose (and block types it doesn't know) survive a save intact.
+  const orig = `data-orig="${escapeAttr2(JSON.stringify(block))}"`;
   if (block.type === "paragraph") {
-    return `<div class="block-editor" data-type="paragraph">
+    return `<div class="block-editor" data-type="paragraph" ${orig}>
       <div class="type-label">Paragraph</div>
-      <textarea data-idx="${i}" class="block-field">${escapeHtml(block.text)}</textarea>
+      <textarea class="block-field">${escapeHtml(block.text)}</textarea>
     </div>`;
   }
   if (block.type === "heading") {
-    return `<div class="block-editor" data-type="heading">
-      <div class="type-label">Heading</div>
-      <input type="text" data-idx="${i}" class="block-field" value="${escapeAttr2(block.text)}">
+    const lvl = block.level || 3;
+    return `<div class="block-editor" data-type="heading" ${orig}>
+      <div class="type-label">${lvl === 4 ? "Label" : "Sub-heading"}</div>
+      <input type="text" class="block-field" value="${escapeAttr2(block.text)}">
+    </div>`;
+  }
+  if (block.type === "callout") {
+    return `<div class="block-editor" data-type="callout" ${orig}>
+      <div class="type-label">Summary box</div>
+      <div class="block-sub">Label <input type="text" class="block-label" value="${escapeAttr2(block.label || "")}"></div>
+      <textarea class="block-field">${escapeHtml(block.text)}</textarea>
+    </div>`;
+  }
+  if (block.type === "bullets") {
+    return `<div class="block-editor" data-type="bullets" ${orig}>
+      <div class="type-label">${block.numbered ? "Numbered list" : "Bulleted list"} &middot; one item per line</div>
+      <textarea class="block-field" rows="${Math.min(12, (block.items || []).length + 1)}">${escapeHtml((block.items || []).join("\n"))}</textarea>
+    </div>`;
+  }
+  if (block.type === "note") {
+    return `<div class="block-editor" data-type="note" ${orig}>
+      <div class="type-label">Source note</div>
+      <input type="text" class="block-field" value="${escapeAttr2(block.text)}">
     </div>`;
   }
   if (block.type === "table") {
     const headerRow = `<tr>${block.headers.map((h, c) => `<td><input value="${escapeAttr2(h)}" data-row="-1" data-col="${c}"></td>`).join("")}</tr>`;
     const bodyRows = block.rows.map((row, r) => `<tr>${row.map((cell, c) => `<td><input value="${escapeAttr2(cell)}" data-row="${r}" data-col="${c}"></td>`).join("")}</tr>`).join("");
-    return `<div class="block-editor" data-type="table" data-idx="${i}" data-ncols="${block.headers.length}">
+    return `<div class="block-editor" data-type="table" data-ncols="${block.headers.length}" ${orig}>
       <div class="type-label">Table</div>
+      <div class="block-sub">Caption <input type="text" class="block-label" value="${escapeAttr2(block.caption || "")}"></div>
       <table>${headerRow}${bodyRows}</table>
     </div>`;
   }
-  return "";
+  return `<div class="block-editor" data-type="other" ${orig}><div class="type-label">${escapeHtml(block.type || "block")} (not editable here)</div></div>`;
 }
 
 function saveSection(sectionKey) {
   const container = document.getElementById("blocks-" + cssId(sectionKey));
   const title = document.getElementById("title-" + cssId(sectionKey)).value;
-  const blockEls = container.querySelectorAll(".block-editor");
   const blocks = [];
-  blockEls.forEach(el => {
+  container.querySelectorAll(".block-editor").forEach(el => {
+    const block = JSON.parse(el.dataset.orig);
+    const field = el.querySelector(".block-field");
+    const label = el.querySelector(".block-label");
     const type = el.dataset.type;
-    if (type === "paragraph") {
-      blocks.push({ type: "paragraph", text: el.querySelector(".block-field").value });
-    } else if (type === "heading") {
-      blocks.push({ type: "heading", text: el.querySelector(".block-field").value });
+    if (type === "paragraph" || type === "heading" || type === "note") {
+      block.text = field.value;
+    } else if (type === "callout") {
+      block.text = field.value;
+      block.label = label.value;
+    } else if (type === "bullets") {
+      block.items = field.value.split("\n").map(x => x.trim()).filter(Boolean);
     } else if (type === "table") {
-      const ncols = parseInt(el.dataset.ncols, 10);
-      const inputs = el.querySelectorAll("input");
+      block.caption = label.value;
       const headers = [];
       const rowsMap = {};
-      inputs.forEach(inp => {
+      el.querySelectorAll("table input").forEach(inp => {
         const row = parseInt(inp.dataset.row, 10);
         const col = parseInt(inp.dataset.col, 10);
         if (row === -1) headers[col] = inp.value;
         else { rowsMap[row] = rowsMap[row] || []; rowsMap[row][col] = inp.value; }
       });
-      const rows = Object.keys(rowsMap).sort((a, b) => a - b).map(r => rowsMap[r]);
-      blocks.push({ type: "table", headers, rows });
+      block.headers = headers;
+      block.rows = Object.keys(rowsMap).sort((a, b) => a - b).map(r => rowsMap[r]);
     }
+    blocks.push(block);
   });
   api("PATCH", "/jobs/" + currentJobId + "/sections/" + encodeURIComponent(sectionKey), { title, blocks })
     .then(() => renderSectionsList())

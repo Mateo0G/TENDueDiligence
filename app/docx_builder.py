@@ -1,95 +1,200 @@
-"""Renders a job's report_sections into a .docx matching the reference
-report's exact styling (fonts, sizes, table borders) and structure (cover
-page, disclaimer, live TOC field, 25-section body) -- per the Phase 0
-decision to match the reference exactly, not just structurally.
+"""Renders a job's report_sections into a .docx matching the client-approved
+CARI Health report's formatting (measured from its XML):
 
-Exact styling facts this replicates (extracted via scripts/inspect_docx_
-styles*.py, see docs/template_structure.md):
-- Default font Open Sans 11pt, docDefaults line spacing 1.15 / 10pt after.
-- Heading 1: Open Sans, bold, 15pt, no space-after.
-- Title: Open Sans, bold, 25pt. Subtitle: Open Sans, 20pt.
-  (The reference file's own Title/Subtitle *paragraphs* carry a direct
-  13pt run-level override that contradicts their own style definitions --
-  judged to be an authoring artifact, not intentional design, so this
-  generator uses the style-defined sizes instead of replicating it.)
-- Tables: plain single black 0.5pt borders (outer + inside), header row
-  bold + vertically centered, body rows vertically centered, no shading.
-  No named table style is used (the reference's "Table1" style reference
-  doesn't resolve to any defined style in its own styles.xml) -- borders
-  are applied as direct table-level formatting instead.
+- Body: Calibri 10.5pt, justified, 6pt after, 1.1 line spacing; 0.5in side
+  margins.
+- Heading 1 (one per report): 18pt bold navy #1F3A5F, centered, starts a
+  new page, navy rule underneath. Under it: the report header block (teal
+  "{Company}  |  {X Section of the Due Diligence Report}", "Prepared by:
+  TEN Capital Network  |  {date}", italic "Basis of preparation: ...").
+- Heading 2 (subsections): 13pt bold navy. Heading 3: 11pt bold teal
+  #1A7F8E.
+- Run-in labels ("Due Diligence Team Assessment"): bold underlined.
+- Summary of Findings box: teal left rule, #EAF2F5 shading, bold navy label.
+- Tables: full width, fixed layout, light grey #BFBFBF grid, navy header
+  row with white bold 9pt text, 9pt body with zebra rows, header repeats on
+  each page.
+- Source notes: 9pt italic grey #555555.
+- Lists: numbered or bulleted with a hanging indent.
+- TOC field over Heading 1-2, refreshed by Word on open.
 """
 import io
 import os
+import re
 from datetime import date
 
 import docx
 from docx.enum.table import WD_TABLE_ALIGNMENT
-from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_TAB_ALIGNMENT
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK, WD_TAB_ALIGNMENT
 from docx.image.image import Image as DocxImage
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-from docx.shared import Emu, Pt, Inches
+from docx.shared import Emu, Inches, Pt, RGBColor, Twips
 
 from app.reference_report import get_disclaimer_text
 
-FONT_NAME = "Open Sans"
+FONT_NAME = "Calibri"
+BODY_PT = 10.5
+TABLE_PT = 9
+NAVY = "1F3A5F"
+TEAL = "1A7F8E"
+CALLOUT_FILL = "EAF2F5"
+ZEBRA_FILL = "F5F7F8"
+GRID = "BFBFBF"
+NOTE_GREY = "555555"
+TABLE_WIDTH_DXA = 10800  # 7.5in: the full text width at 0.5in margins
 
 _ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets")
 _TEN_LOGO_PATH = os.path.join(_ASSETS_DIR, "ten_capital_logo.png")
+_BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
+
+
+def _rgb(hex_color: str) -> RGBColor:
+    return RGBColor.from_string(hex_color)
 
 
 def _scaled_dimensions(image_bytes: bytes, max_width_in: float, max_height_in: float) -> tuple[Emu, Emu]:
-    """(width, height) for image_bytes scaled down to fit within both caps
-    while preserving its native aspect ratio -- python-docx's own Image
-    reader (no Pillow dependency) gives the native size; the smaller of the
-    two candidate scale factors is the binding constraint, same principle
-    as CSS's `object-fit: contain`."""
+    """(width, height) for image_bytes scaled to fit both caps, aspect ratio
+    preserved (CSS `object-fit: contain`)."""
     image = DocxImage.from_blob(image_bytes)
     native_width, native_height = image.width, image.height
     scale = min(Inches(max_width_in) / native_width, Inches(max_height_in) / native_height, 1.0)
     return Emu(round(native_width * scale)), Emu(round(native_height * scale))
 
 
-def _set_run_font(run, size_pt, bold=False):
-    run.font.name = FONT_NAME
-    run.font.size = Pt(size_pt)
-    run.font.bold = bold
-    # East-Asian/complex-script font slots also need setting or some
-    # renderers fall back to a theme default for those slots.
-    # Note: `rFonts.find(...) or OxmlElement(...)` would be unsafe here --
-    # lxml elements are falsy when childless (via __len__), not by identity,
-    # so an existing-but-empty <w:rFonts/> would be silently replaced.
-    rPr = run._element.get_or_add_rPr()
+def _set_fonts(rPr_owner_font, rPr) -> None:
+    """Explicit Calibri in every font slot, and drop theme-font references
+    (the default template's headings point at the theme's Calibri Light,
+    which would override the explicit name)."""
     rFonts = rPr.find(qn("w:rFonts"))
     if rFonts is None:
         rFonts = OxmlElement("w:rFonts")
-        rPr.append(rFonts)
+        rPr.insert(0, rFonts)
+    for attr in ("w:asciiTheme", "w:hAnsiTheme", "w:eastAsiaTheme", "w:cstheme"):
+        if rFonts.get(qn(attr)) is not None:
+            del rFonts.attrib[qn(attr)]
     for attr in ("w:ascii", "w:hAnsi", "w:eastAsia", "w:cs"):
         rFonts.set(qn(attr), FONT_NAME)
 
 
+def _style_run(run, size_pt=BODY_PT, bold=None, italic=None, color=None, underline=None):
+    run.font.name = FONT_NAME
+    run.font.size = Pt(size_pt)
+    if bold is not None:
+        run.font.bold = bold
+    if italic is not None:
+        run.font.italic = italic
+    if underline is not None:
+        run.font.underline = underline
+    if color:
+        run.font.color.rgb = _rgb(color)
+    _set_fonts(run.font, run._element.get_or_add_rPr())
+
+
+def _add_rich_text(paragraph, text: str, size_pt=BODY_PT, bold=False, italic=False, color=None):
+    """Adds `text` as runs, rendering **double asterisks** as bold."""
+    pos = 0
+    for m in _BOLD_RE.finditer(text):
+        if m.start() > pos:
+            _style_run(paragraph.add_run(text[pos:m.start()]), size_pt, bold, italic, color)
+        _style_run(paragraph.add_run(m.group(1)), size_pt, True, italic, color)
+        pos = m.end()
+    if pos < len(text) or not text:
+        _style_run(paragraph.add_run(text[pos:]), size_pt, bold, italic, color)
+
+
+def _spacing(paragraph, before=None, after=None, line=None):
+    pf = paragraph.paragraph_format
+    if before is not None:
+        pf.space_before = Pt(before)
+    if after is not None:
+        pf.space_after = Pt(after)
+    if line is not None:
+        pf.line_spacing = line
+
+
+def _pPr_append(paragraph, xml_tag: str, attrs: dict, children: list[tuple[str, dict]] = ()):
+    el = OxmlElement(xml_tag)
+    for k, v in attrs.items():
+        el.set(qn(k), v)
+    for child_tag, child_attrs in children:
+        child = OxmlElement(child_tag)
+        for k, v in child_attrs.items():
+            child.set(qn(k), v)
+        el.append(child)
+    paragraph._p.get_or_add_pPr().append(el)
+    return el
+
+
+# ---------------------------------------------------------------- styles --
+
+def _configure_style(style, size_pt, bold=False, color=None, italic=False):
+    style.font.name = FONT_NAME
+    style.font.size = Pt(size_pt)
+    style.font.bold = bold
+    style.font.italic = italic
+    style.font.color.rgb = _rgb(color) if color else None
+    _set_fonts(style.font, style.element.get_or_add_rPr())
+
+
 def _configure_styles(doc):
     normal = doc.styles["Normal"]
-    normal.font.name = FONT_NAME
-    normal.font.size = Pt(11)
-    normal.paragraph_format.line_spacing = 1.15
-    normal.paragraph_format.space_after = Pt(10)
+    _configure_style(normal, BODY_PT)
+    normal.paragraph_format.space_after = Pt(6)
+    normal.paragraph_format.line_spacing = 1.1
+    normal.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
 
-    heading1 = doc.styles["Heading 1"]
-    heading1.font.name = FONT_NAME
-    heading1.font.size = Pt(15)
-    heading1.font.bold = True
-    heading1.paragraph_format.space_after = Pt(0)
+    h1 = doc.styles["Heading 1"]
+    _configure_style(h1, 18, bold=True, color=NAVY)
+    pf = h1.paragraph_format
+    pf.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    pf.page_break_before = True
+    pf.space_before = Pt(0)
+    pf.space_after = Pt(4)
+    pf.keep_with_next = True
+    pPr = h1.element.get_or_add_pPr()
+    pBdr = OxmlElement("w:pBdr")
+    bottom = OxmlElement("w:bottom")
+    for k, v in {"w:val": "single", "w:sz": "8", "w:space": "4", "w:color": NAVY}.items():
+        bottom.set(qn(k), v)
+    pBdr.append(bottom)
+    pPr.append(pBdr)
+
+    h2 = doc.styles["Heading 2"]
+    _configure_style(h2, 13, bold=True, color=NAVY)
+    h2.paragraph_format.space_before = Pt(12)
+    h2.paragraph_format.space_after = Pt(4)
+    h2.paragraph_format.keep_with_next = True
+    h2.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.LEFT
+
+    h3 = doc.styles["Heading 3"]
+    _configure_style(h3, 11, bold=True, color=TEAL)
+    h3.paragraph_format.space_before = Pt(9)
+    h3.paragraph_format.space_after = Pt(3)
+    h3.paragraph_format.keep_with_next = True
+    h3.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.LEFT
 
     title = doc.styles["Title"]
-    title.font.name = FONT_NAME
-    title.font.size = Pt(25)
-    title.font.bold = True
+    _configure_style(title, 28, bold=True, color=NAVY)
+    title.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    # The default Title style carries a blue bottom rule; the cover has none.
+    t_pPr = title.element.get_or_add_pPr()
+    for el in t_pPr.findall(qn("w:pBdr")):
+        t_pPr.remove(el)
 
-    subtitle = doc.styles["Subtitle"]
-    subtitle.font.name = FONT_NAME
-    subtitle.font.size = Pt(20)
-    subtitle.font.bold = False
+    # TOC entry styles, so the generated contents page matches the body font.
+    for name, size, bold in (("TOC 1", 11, True), ("TOC 2", 10, False)):
+        try:
+            style = doc.styles[name]
+        except KeyError:
+            from docx.enum.style import WD_STYLE_TYPE
+            style = doc.styles.add_style(name, WD_STYLE_TYPE.PARAGRAPH)
+            style.base_style = normal
+        _configure_style(style, size, bold=bold)
+        style.paragraph_format.space_after = Pt(2)
+        style.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        if name == "TOC 2":
+            style.paragraph_format.left_indent = Inches(0.25)
 
 
 def _configure_page(doc):
@@ -102,197 +207,327 @@ def _configure_page(doc):
     section.bottom_margin = Inches(0.5)
 
 
-def _add_page_number_field(paragraph):
+def _add_field(paragraph, instruction: str, placeholder: str = "", size_pt=BODY_PT):
     run = paragraph.add_run()
-    _set_run_font(run, 11)
+    _style_run(run, size_pt)
     r = run._element
-    fld_begin = OxmlElement("w:fldChar")
-    fld_begin.set(qn("w:fldCharType"), "begin")
-    instr_text = OxmlElement("w:instrText")
-    instr_text.set(qn("xml:space"), "preserve")
-    instr_text.text = "PAGE"
-    fld_separate = OxmlElement("w:fldChar")
-    fld_separate.set(qn("w:fldCharType"), "separate")
-    fld_end = OxmlElement("w:fldChar")
-    fld_end.set(qn("w:fldCharType"), "end")
-    r.append(fld_begin)
-    r.append(instr_text)
-    r.append(fld_separate)
-    r.append(fld_end)
+    begin = OxmlElement("w:fldChar")
+    begin.set(qn("w:fldCharType"), "begin")
+    instr = OxmlElement("w:instrText")
+    instr.set(qn("xml:space"), "preserve")
+    instr.text = instruction
+    separate = OxmlElement("w:fldChar")
+    separate.set(qn("w:fldCharType"), "separate")
+    end = OxmlElement("w:fldChar")
+    end.set(qn("w:fldCharType"), "end")
+    r.append(begin)
+    r.append(instr)
+    r.append(separate)
+    if placeholder:
+        t = OxmlElement("w:t")
+        t.text = placeholder
+        r.append(t)
+    r.append(end)
 
 
 def _add_footer(doc, company_name):
-    """TEN-branded footer on every page: the TEN Capital Network mark, the
-    report title centered, and the page number right-aligned -- matching
-    the hand-built reference reports' footer layout (see
-    docs/template_structure.md), not just a bare line of text."""
+    """TEN Capital Network mark left, report title centered, page number
+    right -- on every page."""
     section = doc.sections[0]
     footer = section.footer
     p = footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
     p.text = ""
-
-    usable_width_in = (
-        section.page_width - section.left_margin - section.right_margin
-    ) / 914400
+    p.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    usable_width_in = (section.page_width - section.left_margin - section.right_margin) / 914400
     with open(_TEN_LOGO_PATH, "rb") as f:
         logo_bytes = f.read()
     width, height = _scaled_dimensions(logo_bytes, max_width_in=1.1, max_height_in=0.4)
     p.add_run().add_picture(io.BytesIO(logo_bytes), width=width, height=height)
-
-    # Two tab stops, same layout the reference footer itself uses: one
-    # centering the report title in the usable width, one right-aligning
-    # the page number at the margin.
     tab_stops = p.paragraph_format.tab_stops
     tab_stops.add_tab_stop(Inches(usable_width_in / 2), alignment=WD_TAB_ALIGNMENT.CENTER)
     tab_stops.add_tab_stop(Inches(usable_width_in), alignment=WD_TAB_ALIGNMENT.RIGHT)
-
-    run = p.add_run(f"\t{company_name} – Due Diligence Report\t")
-    _set_run_font(run, 11)
-    _add_page_number_field(p)
+    _style_run(p.add_run(f"\t{company_name} – Due Diligence Report\t"), 9, color=NAVY)
+    _add_field(p, "PAGE", size_pt=9)
 
 
-def _add_toc_field(doc):
-    """Inserts a live Word TOC field (Heading 1 only). Word regenerates the
-    entries and page numbers when the user presses "Update Field" / F9 on
-    first open -- python-docx cannot compute page numbers itself, and this
-    is what the reference report itself does (see docs/template_structure.md).
-    """
-    paragraph = doc.add_paragraph()
-    run = paragraph.add_run()
-
-    fld_begin = OxmlElement("w:fldChar")
-    fld_begin.set(qn("w:fldCharType"), "begin")
-
-    instr_text = OxmlElement("w:instrText")
-    instr_text.set(qn("xml:space"), "preserve")
-    instr_text.text = 'TOC \\h \\u \\z \\t "Heading 1,1"'
-
-    fld_separate = OxmlElement("w:fldChar")
-    fld_separate.set(qn("w:fldCharType"), "separate")
-
-    placeholder = OxmlElement("w:t")
-    placeholder.text = "Right-click and choose Update Field to generate the table of contents."
-
-    fld_end = OxmlElement("w:fldChar")
-    fld_end.set(qn("w:fldCharType"), "end")
-
-    r_element = run._element
-    r_element.append(fld_begin)
-    r_element.append(instr_text)
-    r_element.append(fld_separate)
-    r_element.append(placeholder)
-    r_element.append(fld_end)
+def _force_field_update_on_open(doc):
+    """Word recomputes the TOC (and page numbers in it) when the file is
+    opened, instead of showing the field's placeholder text."""
+    update_fields = OxmlElement("w:updateFields")
+    update_fields.set(qn("w:val"), "true")
+    doc.settings.element.append(update_fields)
 
 
-_TABLE_BORDER_XML = """
-<w:tblBorders {nsdecls}>
-  <w:top w:val="single" w:sz="4" w:space="0" w:color="000000"/>
-  <w:left w:val="single" w:sz="4" w:space="0" w:color="000000"/>
-  <w:bottom w:val="single" w:sz="4" w:space="0" w:color="000000"/>
-  <w:right w:val="single" w:sz="4" w:space="0" w:color="000000"/>
-  <w:insideH w:val="single" w:sz="4" w:space="0" w:color="000000"/>
-  <w:insideV w:val="single" w:sz="4" w:space="0" w:color="000000"/>
-</w:tblBorders>
-"""
+# ---------------------------------------------------------------- blocks --
 
-
-def _apply_table_borders(table):
-    from docx.oxml.ns import nsdecls
-    from lxml import etree
-
-    tblPr = table._tbl.tblPr
-    borders_xml = _TABLE_BORDER_XML.format(nsdecls=nsdecls("w"))
-    borders_element = etree.fromstring(borders_xml)
-    tblPr.append(borders_element)
-
-
-def _set_cell_valign_center(cell):
+def _shade_cell(cell, fill: str):
     tcPr = cell._tc.get_or_add_tcPr()
-    vAlign = OxmlElement("w:vAlign")
-    vAlign.set(qn("w:val"), "center")
-    tcPr.append(vAlign)
+    shd = OxmlElement("w:shd")
+    shd.set(qn("w:val"), "clear")
+    shd.set(qn("w:color"), "auto")
+    shd.set(qn("w:fill"), fill)
+    tcPr.append(shd)
 
 
-def _add_table_block(doc, headers, rows):
-    table = doc.add_table(rows=1 + len(rows), cols=len(headers))
-    table.alignment = WD_TABLE_ALIGNMENT.LEFT
-    _apply_table_borders(table)
+def _set_cell_width(cell, dxa: int):
+    tcPr = cell._tc.get_or_add_tcPr()
+    tcW = tcPr.find(qn("w:tcW"))
+    if tcW is None:
+        tcW = OxmlElement("w:tcW")
+        tcPr.insert(0, tcW)
+    tcW.set(qn("w:w"), str(dxa))
+    tcW.set(qn("w:type"), "dxa")
 
-    for col_idx, header_text in enumerate(headers):
-        cell = table.rows[0].cells[col_idx]
-        cell.text = ""
-        run = cell.paragraphs[0].add_run(header_text)
-        _set_run_font(run, 11, bold=True)
-        _set_cell_valign_center(cell)
 
-    for row_idx, row in enumerate(rows, start=1):
-        for col_idx, value in enumerate(row):
-            if col_idx >= len(headers):
-                break
-            cell = table.rows[row_idx].cells[col_idx]
-            cell.text = ""
-            run = cell.paragraphs[0].add_run(value)
-            _set_run_font(run, 11)
-            _set_cell_valign_center(cell)
+def _column_widths(headers: list[str], rows: list[list[str]]) -> list[int]:
+    """Fixed-layout column widths proportional to each column's typical
+    content length (clamped, so one long cell can't starve the others)."""
+    n = len(headers)
+    weights = []
+    for c in range(n):
+        lengths = [len(headers[c])] + [len(r[c]) for r in rows if c < len(r)]
+        avg = sum(lengths) / len(lengths)
+        weights.append(min(max(avg, 8), 70))
+    total = sum(weights)
+    widths = [int(TABLE_WIDTH_DXA * w / total) for w in weights]
+    widths[-1] += TABLE_WIDTH_DXA - sum(widths)
+    return widths
 
-    doc.add_paragraph()  # spacer after table, matching reference spacing
+
+def _add_table_block(doc, headers: list[str], rows: list[list[str]], caption: str = ""):
+    if not headers:
+        return
+    n = len(headers)
+    rows = [(list(r) + [""] * n)[:n] for r in rows]
+    if caption:
+        cap = doc.add_paragraph()
+        _spacing(cap, before=6, after=3)
+        cap.paragraph_format.keep_with_next = True
+        cap.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        _add_rich_text(cap, caption, size_pt=BODY_PT, bold=True, color=NAVY)
+
+    table = doc.add_table(rows=1 + len(rows), cols=n)
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    tbl = table._tbl
+    tblPr = tbl.tblPr
+    tblW = tblPr.find(qn("w:tblW"))
+    if tblW is None:
+        tblW = OxmlElement("w:tblW")
+        tblPr.append(tblW)
+    tblW.set(qn("w:w"), str(TABLE_WIDTH_DXA))
+    tblW.set(qn("w:type"), "dxa")
+    layout = OxmlElement("w:tblLayout")
+    layout.set(qn("w:type"), "fixed")
+    tblPr.append(layout)
+    borders = OxmlElement("w:tblBorders")
+    for edge in ("top", "left", "bottom", "right", "insideH", "insideV"):
+        el = OxmlElement(f"w:{edge}")
+        for k, v in {"w:val": "single", "w:sz": "4", "w:space": "0", "w:color": GRID}.items():
+            el.set(qn(k), v)
+        borders.append(el)
+    tblPr.append(borders)
+    cell_mar = OxmlElement("w:tblCellMar")
+    for edge, w in (("left", 80), ("right", 80), ("top", 30), ("bottom", 30)):
+        el = OxmlElement(f"w:{edge}")
+        el.set(qn("w:w"), str(w))
+        el.set(qn("w:type"), "dxa")
+        cell_mar.append(el)
+    tblPr.append(cell_mar)
+
+    widths = _column_widths(headers, rows)
+    for gc, w in zip(tbl.tblGrid.findall(qn("w:gridCol")), widths):
+        gc.set(qn("w:w"), str(w))
+
+    # Header row: repeats on each page, never split.
+    tr_pr = table.rows[0]._tr.get_or_add_trPr()
+    for tag in ("w:tblHeader", "w:cantSplit"):
+        el = OxmlElement(tag)
+        tr_pr.append(el)
+
+    def fill_cell(cell, text, width, header, zebra):
+        _set_cell_width(cell, width)
+        if header:
+            _shade_cell(cell, NAVY)
+        elif zebra:
+            _shade_cell(cell, ZEBRA_FILL)
+        para = cell.paragraphs[0]
+        para.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        _spacing(para, before=0, after=1, line=1.0)
+        lines = (text or "").split("\n")
+        for i, line in enumerate(lines):
+            if i:
+                para = cell.add_paragraph()
+                para.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.LEFT
+                _spacing(para, before=0, after=1, line=1.0)
+            _add_rich_text(para, line, size_pt=TABLE_PT, bold=header, color="FFFFFF" if header else None)
+
+    for c, h in enumerate(headers):
+        fill_cell(table.rows[0].cells[c], h, widths[c], True, False)
+    for r, row in enumerate(rows, start=1):
+        for c, value in enumerate(row):
+            fill_cell(table.rows[r].cells[c], value, widths[c], False, r % 2 == 0)
+
+    spacer = doc.add_paragraph()
+    _spacing(spacer, before=0, after=2)
+
+
+def _add_callout(doc, label: str, text: str):
+    p = doc.add_paragraph()
+    p.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+    p.paragraph_format.left_indent = Twips(200)
+    p.paragraph_format.right_indent = Twips(100)
+    _spacing(p, before=4, after=8)
+    _pPr_append(p, "w:pBdr", {}, [("w:left", {"w:val": "single", "w:sz": "24", "w:space": "8", "w:color": TEAL})])
+    _pPr_append(p, "w:shd", {"w:val": "clear", "w:color": "auto", "w:fill": CALLOUT_FILL})
+    label = (label or "").strip()
+    if label:
+        _style_run(p.add_run(label + "  "), BODY_PT, bold=True, color=NAVY)
+    _add_rich_text(p, text)
+
+
+def _add_label(doc, text: str):
+    """Bold underlined run-in label. The two report-level labels are 12pt,
+    like the reference; inline ones ("Strengths observed:") stay body size."""
+    p = doc.add_paragraph()
+    p.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    p.paragraph_format.keep_with_next = True
+    major = text.startswith("Due Diligence Team Assessment") or text.startswith("Details Provided by")
+    _spacing(p, before=10 if major else 6, after=5 if major else 3)
+    _style_run(p.add_run(text), 12 if major else BODY_PT, bold=True, underline=True)
+
+
+def _add_list(doc, items: list[str], numbered: bool):
+    for i, item in enumerate(items, start=1):
+        p = doc.add_paragraph()
+        pf = p.paragraph_format
+        pf.left_indent = Twips(360)
+        pf.first_line_indent = Twips(-240)
+        pf.tab_stops.add_tab_stop(Twips(360))
+        _spacing(p, before=0, after=3)
+        marker = f"{i}." if numbered else "•"
+        _style_run(p.add_run(f"{marker}\t"), BODY_PT, bold=numbered, color=NAVY if numbered else None)
+        _add_rich_text(p, item)
+
+
+def _add_note(doc, text: str):
+    p = doc.add_paragraph()
+    p.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    _spacing(p, before=6, after=6)
+    _add_rich_text(p, text, size_pt=TABLE_PT, italic=True, color=NOTE_GREY)
 
 
 def _add_content_block(doc, block: dict):
     btype = block.get("type")
     if btype == "paragraph":
-        p = doc.add_paragraph()
-        run = p.add_run(block["text"])
-        _set_run_font(run, 11)
+        _add_rich_text(doc.add_paragraph(), block.get("text", ""))
     elif btype == "heading":
-        # No Heading 2 style in the reference template (see
-        # docs/template_structure.md) -- internal sub-headings render as a
-        # bolded lead-in line within Normal, matching the source exactly.
-        p = doc.add_paragraph()
-        run = p.add_run(block["text"])
-        _set_run_font(run, 11, bold=True)
+        level = block.get("level", 3)
+        if level == 4:
+            _add_label(doc, block.get("text", ""))
+        else:
+            p = doc.add_paragraph(style="Heading 3")
+            _style_run(p.add_run(block.get("text", "")), 11, bold=True, color=TEAL)
     elif btype == "table":
-        _add_table_block(doc, block["headers"], block["rows"])
+        _add_table_block(doc, block.get("headers", []), block.get("rows", []), block.get("caption", ""))
+    elif btype == "callout":
+        _add_callout(doc, block.get("label", ""), block.get("text", ""))
+    elif btype == "bullets":
+        _add_list(doc, block.get("items", []), bool(block.get("numbered")))
+    elif btype == "note":
+        _add_note(doc, block.get("text", ""))
+
+
+# ----------------------------------------------------------- structure --
+
+def _report_date() -> str:
+    today = date.today()
+    return f"{today.strftime('%B')} {today.day}, {today.year}"
+
+
+def _add_report_header(doc, meta: dict):
+    header = (meta or {}).get("header")
+    basis = ((meta or {}).get("basis") or "").strip()
+    if not header and not basis:
+        return
+    if header:
+        p = doc.add_paragraph()
+        p.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        _spacing(p, before=4, after=0)
+        _style_run(p.add_run(header), 12, bold=True, color=TEAL)
+        p2 = doc.add_paragraph()
+        p2.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        _spacing(p2, before=0, after=6)
+        _style_run(p2.add_run(f"Prepared by: TEN Capital Network  |  {_report_date()}"), BODY_PT, color=NOTE_GREY)
+    if basis:
+        basis = re.sub(r"^\**basis of preparation[:.]?\**\s*", "", basis, flags=re.I)
+        p3 = doc.add_paragraph()
+        p3.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        _spacing(p3, before=0, after=6)
+        _style_run(p3.add_run("Basis of preparation: "), BODY_PT, bold=True, italic=True)
+        _add_rich_text(p3, basis, italic=True)
 
 
 def _build_cover_and_front_matter(doc, company_name: str, logo_bytes: bytes | None = None):
     _add_footer(doc, company_name)
 
+    for _ in range(4):
+        doc.add_paragraph()
     if logo_bytes:
-        # Matches the reference reports' cover layout: the client's own
-        # logo, centered, above the company name -- capped well under the
-        # usable page width/height so an unusually square or oversized
-        # source image can't dominate the cover page.
         logo_para = doc.add_paragraph()
         logo_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
         width, height = _scaled_dimensions(logo_bytes, max_width_in=4.5, max_height_in=1.75)
         logo_para.add_run().add_picture(io.BytesIO(logo_bytes), width=width, height=height)
         doc.add_paragraph()
 
-    cover_title = doc.add_paragraph(style="Title")
-    cover_title.add_run(company_name)
-    doc.add_paragraph()
-    title = doc.add_paragraph(style="Title")
-    title.add_run("Due Diligence Report")
-    subtitle = doc.add_paragraph(style="Subtitle")
-    subtitle.add_run("Confidential")
-    date_para = doc.add_paragraph()
-    _set_run_font(date_para.add_run(date.today().strftime("%B %Y")), 11)
+    name = doc.add_paragraph(style="Title")
+    _style_run(name.add_run(company_name), 28, bold=True, color=NAVY)
+    sub = doc.add_paragraph()
+    sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    _spacing(sub, before=6, after=24)
+    _style_run(sub.add_run("Due Diligence Report"), 20, color=TEAL)
+    for text, size, color in (
+        ("Prepared by TEN Capital Network", 12, NAVY),
+        (_report_date(), 12, NOTE_GREY),
+        ("Confidential", 11, NOTE_GREY),
+    ):
+        p = doc.add_paragraph()
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        _spacing(p, before=0, after=4)
+        _style_run(p.add_run(text), size, bold=(text == "Confidential"), color=color)
 
-    _add_toc_field(doc)
-    doc.add_paragraph()
+    # Contents on its own page.
+    brk = doc.add_paragraph()
+    brk.add_run().add_break(WD_BREAK.PAGE)
+    toc_title = doc.add_paragraph()
+    toc_title.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    _spacing(toc_title, before=0, after=8)
+    _style_run(toc_title.add_run("Contents"), 18, bold=True, color=NAVY)
+    toc = doc.add_paragraph()
+    toc.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    _add_field(toc, 'TOC \\o "1-2" \\h \\z \\u',
+               "Right-click and choose Update Field to generate the table of contents.")
 
-    disclaimer_heading = doc.add_paragraph()
-    _set_run_font(disclaimer_heading.add_run("TEN Capital Network Disclaimer:"), 11, bold=True)
-    disclaimer_body = doc.add_paragraph()
-    _set_run_font(disclaimer_body.add_run(get_disclaimer_text()), 11)
-
-    doc.add_page_break()
+    disclaimer = get_disclaimer_text()
+    if disclaimer:
+        brk = doc.add_paragraph()
+        brk.add_run().add_break(WD_BREAK.PAGE)
+        label = doc.add_paragraph()
+        label.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        _style_run(label.add_run("TEN Capital Network Disclaimer"), 12, bold=True, color=NAVY)
+        for para in disclaimer.split("\n\n"):
+            p = doc.add_paragraph()
+            _add_rich_text(p, para, size_pt=9.5)
+    # No trailing page break: every Heading 1 starts its own page.
 
 
 def _add_report_sections(doc, report_sections: list[dict]):
     for section in report_sections:
-        doc.add_heading(section["title"], level=1)
+        level = section.get("heading_level") or 1
+        if level == 1:
+            doc.add_heading(section["title"], level=1)
+            _add_report_header(doc, section.get("meta") or {})
+        else:
+            doc.add_heading(section["title"], level=2)
         for block in section["content"]:
             _add_content_block(doc, block)
 
@@ -305,22 +540,12 @@ _BLOCK_LABELS = {
 
 
 def _add_qa_report_card(doc, qa_scores: list[dict]):
-    """Stage 6 appendix: every Stage 4 score, grouped by block, plus each
-    assessment's narrative findings. Report Card of scores (the aggregate,
-    see app/tasks/report_card.py) is rendered as the summary table; the
-    master validation check is kept on its own 1-10 scale, never blended
-    into the same table (see docs/prompt_inventory.md Flag M1)."""
-    doc.add_page_break()
+    """Stage 6 appendix: every Stage 4 score, grouped by block; the master
+    validation check stays on its own 1-10 scale, never blended in."""
     doc.add_heading("Due Diligence Assessment Report Card", level=1)
-
     report_card = next((s for s in qa_scores if s["assessment_name"] == "Report Card of scores"), None)
     if report_card:
-        p = doc.add_paragraph()
-        _set_run_font(
-            p.add_run(f"Overall average score: {report_card['findings'].get('overall_average')}"),
-            11,
-            bold=True,
-        )
+        _add_callout(doc, "Overall average score.", str(report_card["findings"].get("overall_average")))
 
     for block_key in ("dd_assessment", "life_science_assessment", "master_validation"):
         rows = [
@@ -329,7 +554,7 @@ def _add_qa_report_card(doc, qa_scores: list[dict]):
         ]
         if not rows:
             continue
-        doc.add_heading(f"{_BLOCK_LABELS[block_key]} Scores", level=1)
+        doc.add_heading(f"{_BLOCK_LABELS[block_key]} Scores", level=2)
         _add_table_block(
             doc,
             headers=["Assessment", "Score", "Scale", "Summary"],
@@ -346,15 +571,12 @@ def _add_qa_report_card(doc, qa_scores: list[dict]):
 
 
 def _add_gap_analysis_and_mitigation(doc, gap_analysis: dict | None, mitigation_strategy: dict | None):
-    """Stage 6 appendix folding in Stage 5's output (docs/prompt_inventory.md
-    §6): each identified gap paired with its proposed mitigation."""
+    """Stage 6 appendix folding in Stage 5's output: each identified gap
+    paired with its proposed mitigation."""
     if not gap_analysis:
         return
-    doc.add_page_break()
     doc.add_heading("Gap Analysis & Mitigation Strategy", level=1)
-
-    summary_p = doc.add_paragraph()
-    _set_run_font(summary_p.add_run(gap_analysis.get("summary", "")), 11)
+    _add_callout(doc, "Summary.", gap_analysis.get("summary", ""))
 
     mitigations_by_gap = {}
     if mitigation_strategy:
@@ -376,35 +598,28 @@ def _add_gap_analysis_and_mitigation(doc, gap_analysis: dict | None, mitigation_
     )
 
 
-def _force_field_update_on_open(doc):
-    """Without this, the live TOC field (see _add_toc_field) shows its raw
-    placeholder text -- "Right-click and choose Update Field..." -- until
-    someone manually refreshes it, which reads as a broken, unfinished
-    document to anyone who doesn't know to do that. This setting tells Word
-    to recompute every field itself the moment the file is opened, so the
-    TOC is already correct on first view."""
-    element = doc.settings.element
-    update_fields = OxmlElement("w:updateFields")
-    update_fields.set(qn("w:val"), "true")
-    element.append(update_fields)
-
-
-def build_report_docx(company_name: str, report_sections: list[dict], logo_bytes: bytes | None = None) -> bytes:
-    """The Stage 3/4 review-checkpoint draft: cover page + the 25 drafted
-    sections only. report_sections: rows from repo.list_report_sections,
-    already ordered by order_index. logo_bytes: the job's uploaded company
-    logo image, if any (see app.main's logo upload endpoint) -- optional,
-    the cover page falls back to text-only when it's absent."""
+def _new_document():
     doc = docx.Document()
     _configure_styles(doc)
     _configure_page(doc)
     _force_field_update_on_open(doc)
-    _build_cover_and_front_matter(doc, company_name, logo_bytes)
-    _add_report_sections(doc, report_sections)
+    return doc
 
+
+def _to_bytes(doc) -> bytes:
     buffer = io.BytesIO()
     doc.save(buffer)
     return buffer.getvalue()
+
+
+def build_report_docx(company_name: str, report_sections: list[dict], logo_bytes: bytes | None = None) -> bytes:
+    """The Stage 3/4 review-checkpoint draft: cover, contents, disclaimer,
+    and every drafted report. report_sections: rows from
+    repo.list_report_sections, already ordered by order_index."""
+    doc = _new_document()
+    _build_cover_and_front_matter(doc, company_name, logo_bytes)
+    _add_report_sections(doc, report_sections)
+    return _to_bytes(doc)
 
 
 def build_final_report_docx(
@@ -415,19 +630,11 @@ def build_final_report_docx(
     mitigation_strategy: dict | None,
     logo_bytes: bytes | None = None,
 ) -> bytes:
-    """The Stage 6 final render: the same 25 sections, plus the QA Report
-    Card and Gap Analysis/Mitigation appendices folded in, per the brief's
-    "fold the QA report card and mitigation content into the document"
-    instruction for Stage 6."""
-    doc = docx.Document()
-    _configure_styles(doc)
-    _configure_page(doc)
-    _force_field_update_on_open(doc)
+    """The Stage 6 final render: the same reports plus the QA Report Card
+    and Gap Analysis/Mitigation appendices."""
+    doc = _new_document()
     _build_cover_and_front_matter(doc, company_name, logo_bytes)
     _add_report_sections(doc, report_sections)
     _add_qa_report_card(doc, qa_scores)
     _add_gap_analysis_and_mitigation(doc, gap_analysis, mitigation_strategy)
-
-    buffer = io.BytesIO()
-    doc.save(buffer)
-    return buffer.getvalue()
+    return _to_bytes(doc)

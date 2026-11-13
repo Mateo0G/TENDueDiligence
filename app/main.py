@@ -69,6 +69,28 @@ def _iter_zip_entries(zip_file_like, _prefix: str = "", _depth: int = 0):
                     pass
             yield full_path, entry_data
 
+def _migrate_on_startup() -> None:
+    """Apply pending Alembic migrations when the web service boots, so a
+    deploy that adds columns (e.g. the digest/key-facts migration) works
+    without a separate manual step. A no-op when already at head; only the
+    web service does this, never the worker, so two processes never race
+    on it. Failure is logged, not fatal -- the existing schema still serves
+    everything that doesn't touch the new columns."""
+    import logging
+    import os
+
+    from alembic import command
+    from alembic.config import Config
+
+    try:
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        command.upgrade(Config(os.path.join(root, "alembic.ini")), "head")
+    except Exception:
+        logging.getLogger("web").exception("alembic upgrade on startup failed")
+
+
+_migrate_on_startup()
+
 app = FastAPI(title="TEN Due Diligence Report Generator")
 
 
@@ -115,6 +137,10 @@ class DataroomFileOut(BaseModel):
     category_method: str | None
     size_bytes: int | None
     content_type: str | None
+    # Filled once the file's digest task has read it (app/tasks/digest_document.py):
+    # "read", "read_visually" (scanned, read from page images) or "unreadable".
+    digest_status: str | None = None
+    tags: list[str] = []
 
 
 class UploadResult(BaseModel):
@@ -152,7 +178,17 @@ def _to_file_out(row: dict) -> DataroomFileOut:
         category_method=row["category_method"],
         size_bytes=row["size_bytes"],
         content_type=row["content_type"],
+        digest_status=_digest_status(row.get("digest")),
+        tags=(row.get("digest") or {}).get("tags") or [],
     )
+
+
+def _digest_status(digest: dict | None) -> str | None:
+    if not digest:
+        return None
+    if digest.get("fallback"):
+        return "unreadable"
+    return "read_visually" if digest.get("read_visually") else "read"
 
 
 @app.post("/jobs", response_model=CreateJobResponse)
@@ -195,10 +231,13 @@ def delete_job(job_id: str):
     letting someone clean up test jobs without a human re-checking R2."""
     job = _require_job(job_id)
     for f in repo.list_dataroom_files(job_id):
-        try:
-            storage.delete(f["object_key"])
-        except Exception:
-            pass
+        for key in (f["object_key"], (f.get("digest") or {}).get("text_key")):
+            if not key:
+                continue
+            try:
+                storage.delete(key)
+            except Exception:
+                pass
     for key in (job["logo_key"], job["output_key"]):
         if key:
             try:
@@ -268,10 +307,9 @@ def _store_dataroom_file(job_id: str, classify_path: str, original_filename: str
 
     category, method = classify.categorize_file(classify_path)
     if category is None:
-        # Keyword matching found nothing -- ask Haiku rather than silently
-        # dropping the file out of every Stage 2 section's dataroom text
-        # (dataroom_text_for_categories only includes a file whose category
-        # is in a section's list; "uncategorized" has no section at all).
+        # Keyword matching found nothing -- ask Haiku for a display label.
+        # (Drafting no longer routes by this category: each file's digest
+        # tags it for every report it is evidence for.)
         llm_category = claude_client.categorize_file_llm(original_filename, classify_path)
         if llm_category is not None:
             category, method = llm_category, "llm"
@@ -302,7 +340,7 @@ async def upload_dataroom_files(job_id: str, files: list[UploadFile]):
     upload -- real datarooms almost always arrive as a single zip, so each
     .zip is transparently expanded and every entry inside it is stored and
     classified exactly as if it had been uploaded on its own."""
-    _require_job(job_id)
+    job = _require_job(job_id)
     uploaded = []
     for f in files:
         if f.filename.lower().endswith(".zip"):
@@ -323,12 +361,15 @@ async def upload_dataroom_files(job_id: str, files: list[UploadFile]):
         else:
             data = await f.read()
             uploaded.append(_store_dataroom_file(job_id, f.filename, f.filename, data, f.content_type))
+    # Start reading every file now, in the background, so digests are
+    # (mostly) done by the time Stage 2 is started.
+    pipeline.create_digest_tasks(job_id, job["company_name"], [u.id for u in uploaded])
     return UploadResult(uploaded=uploaded)
 
 
 @app.post("/jobs/{job_id}/pitch-deck", response_model=DataroomFileOut)
 async def upload_pitch_deck(job_id: str, file: UploadFile):
-    _require_job(job_id)
+    job = _require_job(job_id)
     data = await file.read()
     object_key = f"pitch-deck/{job_id}/{uuid.uuid4()}-{file.filename}"
     storage.put_bytes(object_key, data, content_type=file.content_type)
@@ -344,6 +385,7 @@ async def upload_pitch_deck(job_id: str, file: UploadFile):
         content_type=file.content_type,
     )
     repo.set_job_pitch_deck_key(job_id, object_key)
+    pipeline.create_digest_tasks(job_id, job["company_name"], [file_id])
     row = {
         "id": file_id,
         "original_filename": file.filename,
@@ -486,22 +528,26 @@ class ReportSectionOut(BaseModel):
     order_index: int
     content: list[dict]
     status: str
+    heading_level: int = 1
+    meta: dict = {}
+
+
+def _to_section_out(s: dict) -> ReportSectionOut:
+    return ReportSectionOut(
+        section_key=s["section_key"],
+        title=s["title"],
+        order_index=s["order_index"],
+        content=s["content"],
+        status=s["status"],
+        heading_level=s.get("heading_level") or 1,
+        meta=s.get("meta") or {},
+    )
 
 
 @app.get("/jobs/{job_id}/sections", response_model=list[ReportSectionOut])
 def list_sections(job_id: str):
     _require_job(job_id)
-    sections = repo.list_report_sections(job_id)
-    return [
-        ReportSectionOut(
-            section_key=s["section_key"],
-            title=s["title"],
-            order_index=s["order_index"],
-            content=s["content"],
-            status=s["status"],
-        )
-        for s in sections
-    ]
+    return [_to_section_out(s) for s in repo.list_report_sections(job_id)]
 
 
 @app.patch("/jobs/{job_id}/sections/{section_key}", response_model=ReportSectionOut)
@@ -515,14 +561,7 @@ def update_section(job_id: str, section_key: str, req: UpdateSectionRequest):
         raise HTTPException(status_code=404, detail="section not found")
     blocks = [b.model_dump() for b in req.blocks]
     repo.update_report_section_content(job_id, section_key, req.title, blocks)
-    updated = repo.get_report_section(job_id, section_key)
-    return ReportSectionOut(
-        section_key=updated["section_key"],
-        title=updated["title"],
-        order_index=updated["order_index"],
-        content=updated["content"],
-        status=updated["status"],
-    )
+    return _to_section_out(repo.get_report_section(job_id, section_key))
 
 
 class ApproveDraftResult(BaseModel):

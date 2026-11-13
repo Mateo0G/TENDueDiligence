@@ -22,7 +22,7 @@ import anthropic
 from anthropic.types.message_create_params import MessageCreateParamsNonStreaming
 from anthropic.types.messages.batch_create_params import Request
 
-from app import claude_client, pipeline, repo
+from app import claude_client, evidence, pipeline, repo
 from app.models import DraftingOutput, QAScoreOutput
 from app.qa_spec import DD_ASSESSMENT_SPECS, LIFE_SCIENCE_SPECS, MASTER_VALIDATION_SPEC
 from app.sections_spec import SPEC_BY_TASK_KEY
@@ -79,10 +79,8 @@ def run_stage2_batch(job_id: str, company_name: str, poll_interval: float = 10.0
         task_by_custom_id = {}
         for task in claimed:
             spec = SPEC_BY_TASK_KEY[task["task_key"]]
-            dataroom_text = pipeline.dataroom_text_for_categories(job_id, spec.dataroom_categories)
-            deck_text = pipeline.pitch_deck_text(job_id)
-            dependency_context = pipeline.build_dependency_context(job_id, company_name, spec)
-            params = claude_client.build_drafting_request(spec, company_name, dataroom_text, deck_text, dependency_context)
+            inputs = pipeline.build_drafting_inputs(job_id, company_name, spec)
+            params = claude_client.build_drafting_request(spec, company_name, **inputs)
             custom_id = str(task["id"])
             requests.append(Request(custom_id=custom_id, params=MessageCreateParamsNonStreaming(**params)))
             task_by_custom_id[custom_id] = task
@@ -93,7 +91,8 @@ def run_stage2_batch(job_id: str, company_name: str, poll_interval: float = 10.0
                 try:
                     output = claude_client.parse_structured_response(result.result.message, DraftingOutput)
                     pipeline.persist_drafting_output(
-                        job_id, company_name, SPEC_BY_TASK_KEY[task["task_key"]], output, task["id"]
+                        job_id, company_name, SPEC_BY_TASK_KEY[task["task_key"]], output, task["id"],
+                        final_attempt=task["attempts"] + 1 >= repo.MAX_TASK_ATTEMPTS,
                     )
                     repo.complete_task(task["id"], {"persisted": True})
                     completed += 1
@@ -127,7 +126,7 @@ def run_stage4_batch(job_id: str, company_name: str, poll_interval: float = 10.0
         log.info("stage4 batch wave %d: %d ready task(s)", wave, len(claimed))
 
         report_text = pipeline.render_full_report_text(job_id)
-        dataroom_text = pipeline.full_dataroom_text(job_id)
+        dataroom_text = evidence.qa_evidence(job_id)
 
         requests = []
         task_by_custom_id = {}
