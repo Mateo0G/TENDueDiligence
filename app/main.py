@@ -2,6 +2,7 @@
 pipeline work (Claude calls, docx rendering) happens in the separate worker
 process (app/worker.py), never on this request/response cycle.
 """
+import hashlib
 import io
 import mimetypes
 import uuid
@@ -12,7 +13,7 @@ from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
-from app import classify, claude_client, pipeline, repo, storage
+from app import classify, evidence, pipeline, repo, storage
 from app.docx_builder import build_report_docx
 from app.models import ContentBlock
 
@@ -145,6 +146,7 @@ class DataroomFileOut(BaseModel):
 
 class UploadResult(BaseModel):
     uploaded: list[DataroomFileOut]
+    skipped_duplicates: int = 0  # files this job already had, byte for byte
 
 
 class VerticalResult(BaseModel):
@@ -160,6 +162,7 @@ class JobOut(BaseModel):
     draft_approved_at: datetime | None
     dataroom_files: list[DataroomFileOut]
     has_logo: bool
+    api_cost_usd: float = 0.0  # every Claude call made for this job so far (app/usage.py)
 
 
 def _require_job(job_id: str) -> dict:
@@ -186,6 +189,8 @@ def _to_file_out(row: dict) -> DataroomFileOut:
 def _digest_status(digest: dict | None) -> str | None:
     if not digest:
         return None
+    if digest.get("duplicate_of"):
+        return "duplicate"
     if digest.get("fallback"):
         return "unreadable"
     return "read_visually" if digest.get("read_visually") else "read"
@@ -238,7 +243,7 @@ def delete_job(job_id: str):
                 storage.delete(key)
             except Exception:
                 pass
-    for key in (job["logo_key"], job["output_key"]):
+    for key in (job["logo_key"], job["output_key"], evidence.drafting_context_key(job_id)):
         if key:
             try:
                 storage.delete(key)
@@ -264,16 +269,25 @@ def get_job(job_id: str):
         draft_approved_at=job["draft_approved_at"],
         dataroom_files=[_to_file_out(f) for f in files],
         has_logo=bool(job["logo_key"]),
+        api_cost_usd=round(repo.job_total_cost(job_id), 2),
     )
 
 
-def _store_dataroom_file(job_id: str, classify_path: str, original_filename: str, data: bytes, content_type: str | None) -> DataroomFileOut:
+def _store_dataroom_file(job_id: str, classify_path: str, original_filename: str, data: bytes,
+                         content_type: str | None) -> DataroomFileOut | None:
     """Shared by both a directly-uploaded file and one extracted from a zip.
     `classify_path` carries the zip's internal folder path (if any) so a
     file like "financial/cap_table.xlsx" gets the benefit of the "financial"
     folder name as a classification signal, same as app/classify.py already
     does for a plain filename -- `original_filename` is just the basename,
-    kept clean for display."""
+    kept clean for display.
+
+    Returns None for a file this job already has byte-for-byte (the same
+    zip uploaded twice, or one document filed in several folders): storing
+    and reading it again would only double the cost and the evidence."""
+    sha256 = hashlib.sha256(data).hexdigest()
+    if repo.find_file_by_sha256(job_id, sha256) is not None:
+        return None
     if classify.is_pitch_deck_path(classify_path):
         # A dataroom zip that bundles the pitch deck inside it, rather than
         # it being uploaded through the dedicated endpoint -- route it the
@@ -290,6 +304,8 @@ def _store_dataroom_file(job_id: str, classify_path: str, original_filename: str
             category_method=None,
             size_bytes=len(data),
             content_type=content_type,
+            sha256=sha256,
+            source_path=classify_path,
         )
         repo.set_job_pitch_deck_key(job_id, object_key)
         return _to_file_out({
@@ -305,14 +321,10 @@ def _store_dataroom_file(job_id: str, classify_path: str, original_filename: str
     object_key = f"dataroom/{job_id}/{uuid.uuid4()}-{original_filename}"
     storage.put_bytes(object_key, data, content_type=content_type)
 
+    # Keyword category: a display label only until the file is read (its
+    # digest then tags it for every report it is evidence for). No LLM call
+    # here any more -- it ran inside the upload request, one file at a time.
     category, method = classify.categorize_file(classify_path)
-    if category is None:
-        # Keyword matching found nothing -- ask Haiku for a display label.
-        # (Drafting no longer routes by this category: each file's digest
-        # tags it for every report it is evidence for.)
-        llm_category = claude_client.categorize_file_llm(original_filename, classify_path)
-        if llm_category is not None:
-            category, method = llm_category, "llm"
     file_id = repo.add_dataroom_file(
         job_id=job_id,
         object_key=object_key,
@@ -322,6 +334,8 @@ def _store_dataroom_file(job_id: str, classify_path: str, original_filename: str
         category_method=method,
         size_bytes=len(data),
         content_type=content_type,
+        sha256=sha256,
+        source_path=classify_path,
     )
     return _to_file_out({
         "id": file_id,
@@ -341,7 +355,16 @@ async def upload_dataroom_files(job_id: str, files: list[UploadFile]):
     .zip is transparently expanded and every entry inside it is stored and
     classified exactly as if it had been uploaded on its own."""
     job = _require_job(job_id)
-    uploaded = []
+    uploaded, skipped = [], 0
+
+    def store(path, name, data, content_type):
+        nonlocal skipped
+        out = _store_dataroom_file(job_id, path, name, data, content_type)
+        if out is None:
+            skipped += 1
+        else:
+            uploaded.append(out)
+
     for f in files:
         if f.filename.lower().endswith(".zip"):
             # Stream straight from the upload's own spooled temp file and
@@ -354,23 +377,25 @@ async def upload_dataroom_files(job_id: str, files: list[UploadFile]):
             try:
                 for internal_path, entry_data in _iter_zip_entries(f.file):
                     basename = internal_path.rsplit("/", 1)[-1]
-                    content_type = mimetypes.guess_type(basename)[0]
-                    uploaded.append(_store_dataroom_file(job_id, internal_path, basename, entry_data, content_type))
+                    store(internal_path, basename, entry_data, mimetypes.guess_type(basename)[0])
             except zipfile.BadZipFile:
                 raise HTTPException(status_code=400, detail=f"{f.filename} is not a valid zip file")
         else:
-            data = await f.read()
-            uploaded.append(_store_dataroom_file(job_id, f.filename, f.filename, data, f.content_type))
+            store(f.filename, f.filename, await f.read(), f.content_type)
     # Start reading every file now, in the background, so digests are
     # (mostly) done by the time Stage 2 is started.
     pipeline.create_digest_tasks(job_id, job["company_name"], [u.id for u in uploaded])
-    return UploadResult(uploaded=uploaded)
+    return UploadResult(uploaded=uploaded, skipped_duplicates=skipped)
 
 
 @app.post("/jobs/{job_id}/pitch-deck", response_model=DataroomFileOut)
 async def upload_pitch_deck(job_id: str, file: UploadFile):
     job = _require_job(job_id)
     data = await file.read()
+    sha256 = hashlib.sha256(data).hexdigest()
+    existing = repo.find_file_by_sha256(job_id, sha256)
+    if existing is not None:
+        return _to_file_out(existing)  # already uploaded (e.g. it was inside the dataroom zip)
     object_key = f"pitch-deck/{job_id}/{uuid.uuid4()}-{file.filename}"
     storage.put_bytes(object_key, data, content_type=file.content_type)
 
@@ -383,6 +408,8 @@ async def upload_pitch_deck(job_id: str, file: UploadFile):
         category_method=None,
         size_bytes=len(data),
         content_type=file.content_type,
+        sha256=sha256,
+        source_path=file.filename,
     )
     repo.set_job_pitch_deck_key(job_id, object_key)
     pipeline.create_digest_tasks(job_id, job["company_name"], [file_id])
@@ -441,6 +468,47 @@ def start_stage2(job_id: str):
         raise HTTPException(status_code=409, detail="Stage 2 has already been started for this job")
     task_ids = pipeline.create_stage2_tasks(job_id, job["company_name"])
     return Stage2Result(task_ids=task_ids)
+
+
+@app.post("/jobs/{job_id}/stage2/restart", response_model=Stage2Result)
+def restart_stage2(job_id: str):
+    """Discards the drafted report and everything after it (QA, gap
+    analysis, approval) and runs Stage 2 again on the documents already
+    read -- for a job whose draft failed or predates a pipeline change.
+    Reading is not repeated, so this costs only Stage 2 itself."""
+    job = _require_job(job_id)
+    running = [t for t in repo.list_tasks_for_job(job_id)
+               if t["stage"] >= pipeline.STAGE_DRAFTING and t["status"] == "running"]
+    if running:
+        raise HTTPException(status_code=409, detail="Stage 2+ tasks are still running; wait for them to finish")
+    return Stage2Result(task_ids=pipeline.restart_stage2(job_id, job["company_name"]))
+
+
+class UsageRow(BaseModel):
+    purpose: str
+    model: str
+    calls: int
+    input_tokens: int
+    output_tokens: int
+    cache_write_tokens: int
+    cache_read_tokens: int
+    web_searches: int
+    cost_usd: float
+
+
+class UsageOut(BaseModel):
+    total_cost_usd: float
+    rows: list[UsageRow]
+
+
+@app.get("/jobs/{job_id}/usage", response_model=UsageOut)
+def job_usage(job_id: str):
+    """What this job's Claude calls actually cost, grouped by purpose (read,
+    key_facts, research, cache_warmup, draft:<part>, qa_all, ...)."""
+    _require_job(job_id)
+    rows = [UsageRow(**{k: (float(v) if k == "cost_usd" else v) for k, v in r.items()})
+            for r in repo.job_usage_summary(job_id)]
+    return UsageOut(total_cost_usd=round(sum(r.cost_usd for r in rows), 4), rows=rows)
 
 
 class TaskOut(BaseModel):

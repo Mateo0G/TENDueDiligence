@@ -340,11 +340,22 @@ async function renderJob() {
   const prevQaBody = document.getElementById("qa-body")?.innerHTML;
   const prevGapBody = document.getElementById("gap-body")?.innerHTML;
 
-  const digests = taskCounts(tasks, "digest_document");
+  // Reading progress counts files (several are read per task).
+  const readTasks = tasks.filter(t => t.task_type === "read_files" || t.task_type === "digest_document");
+  const readActive = readTasks.some(t => t.status === "pending" || t.status === "running");
+  const digests = {
+    total: files.length,
+    done: files.filter(f => f.digest_status).length,
+    failed: files.filter(f => f.digest_status === "unreadable").length,
+  };
+  if (!readTasks.length) digests.total = 0;
   const keyFacts = taskCounts(tasks, "key_facts");
+  const research = taskCounts(tasks, "research");
+  const warm = taskCounts(tasks, "warm_cache");
   const draft = taskCounts(tasks, "draft_section");
   const compile = taskCounts(tasks, "compile_draft");
-  const qa = taskCounts(tasks, "qa_score");
+  const qaOld = taskCounts(tasks, "qa_score"), qaAll = taskCounts(tasks, "qa_all");
+  const qa = { total: qaOld.total + qaAll.total, done: qaOld.done + qaAll.done, failed: qaOld.failed + qaAll.failed };
   const reportCard = taskCounts(tasks, "report_card");
   const gap = taskCounts(tasks, "gap_analysis");
   const mitigation = taskCounts(tasks, "mitigation_strategy");
@@ -353,7 +364,8 @@ async function renderJob() {
   const hasFiles = files.some(f => f.file_kind === "dataroom");
   const stage2Started = draft.total > 0;
   const stage2Done = stage2Started && draft.done === draft.total && draft.failed === 0 && keyFacts.done === keyFacts.total;
-  const digestsRunning = digests.total > 0 && digests.done + digests.failed < digests.total;
+  const stage2Active = tasks.some(t => t.stage >= 2 && (t.status === "running"));
+  const digestsRunning = readActive;
   const stage3Started = compile.total > 0;
   const stage3Done = job.status === "awaiting_review" || job.status === "completed";
   const approved = !!job.draft_approved_at;
@@ -371,7 +383,8 @@ async function renderJob() {
       <div class="flex-between">
         <div>
           <h2 style="margin-bottom:4px;">${escapeHtml(job.company_name)}</h2>
-          <div>${badge(job.status)} ${job.vertical ? `<span class="muted" style="margin-left:8px;">${job.vertical}</span>` : ""}</div>
+          <div>${badge(job.status)} ${job.vertical ? `<span class="muted" style="margin-left:8px;">${job.vertical}</span>` : ""}
+            <a class="muted" style="margin-left:8px;" href="/jobs/${currentJobId}/usage" target="_blank" title="Claude API spend for this job, by step">API cost so far: $${(job.api_cost_usd || 0).toFixed(2)}</a></div>
         </div>
         <div>
           <a class="docx-link" href="/jobs/${currentJobId}/draft.docx" target="_blank">Preview draft (.docx)</a>
@@ -443,8 +456,10 @@ async function renderJob() {
 
       <div class="stage-row">
         <div class="title">Stage 2 &mdash; Key facts &amp; draft reports</div>
-        <div class="hint">${stage2HintText(digests, keyFacts, draft)}</div>
-        <button onclick="runStage('stage2')" ${!hasFiles || stage2Started ? "disabled" : ""}>Start</button>
+        <div class="hint">${stage2HintText(digests, readActive, keyFacts, research, warm, draft)}</div>
+        ${stage2Started
+          ? `<button class="secondary" onclick="restartStage2()" ${stage2Active ? "disabled title='Wait for the running tasks to finish'" : ""}>Restart Stage 2</button>`
+          : `<button onclick="runStage('stage2')" ${!hasFiles ? "disabled" : ""}>Start</button>`}
       </div>
       ${draft.total ? `<div class="progress-row"><div class="progress-bar"><div style="width:${(draft.done/draft.total*100)||0}%"></div></div></div>` : ""}
 
@@ -464,7 +479,7 @@ async function renderJob() {
 
       <div class="stage-row">
         <div class="title">Stage 4 &mdash; QA &amp; scoring</div>
-        <div class="hint">${qa.total ? `${qa.done}/${qa.total} checks${qa.failed ? `, ${qa.failed} failed` : ""}, report card ${reportCard.done ? "done" : "pending"}` : "waiting on approval"}</div>
+        <div class="hint">${qa.total ? (qaAll.total ? (qaAll.done ? "all checks scored" : "scoring every check in one pass...") : `${qa.done}/${qa.total} checks`) + `${qa.failed ? `, ${qa.failed} failed` : ""}, report card ${reportCard.done ? "done" : "pending"}` : "waiting on approval"}</div>
         <button onclick="runStage('stage4')" ${!approved || stage4Started ? "disabled" : ""}>Start</button>
       </div>
       ${qa.total ? `<div class="progress-row"><div class="progress-bar"><div style="width:${(qa.done/qa.total*100)||0}%"></div></div></div>` : ""}
@@ -506,10 +521,16 @@ async function renderJob() {
   if (anyInProgress) pollTimer = setTimeout(renderJob, 4000);
 }
 
-function stage2HintText(digests, keyFacts, draft) {
+function stage2HintText(digests, readActive, keyFacts, research, warm, draft) {
   if (!draft.total) return "not started";
-  if (digests.done + digests.failed < digests.total) return `waiting for documents to be read (${digests.done}/${digests.total})`;
-  if (keyFacts.done < keyFacts.total) return keyFacts.failed ? "key facts sheet failed" : "building the key facts sheet...";
+  if (readActive) return `waiting for documents to be read (${digests.done}/${digests.total})`;
+  if (keyFacts.done < keyFacts.total || research.done < research.total) {
+    const parts = [];
+    if (keyFacts.done < keyFacts.total) parts.push("building the key facts sheet");
+    if (research.done < research.total) parts.push("researching competitors, comparables and acquirers on the web");
+    return parts.join(" and ") + "...";
+  }
+  if (warm.done < warm.total) return "preparing the shared evidence for drafting...";
   return `${draft.done}/${draft.total} report parts drafted${draft.failed ? `, ${draft.failed} failed` : ""}`;
 }
 
@@ -523,13 +544,16 @@ function fileStatusHtml(f, tasks) {
   if (f.digest_status === "unreadable") {
     return `<span class="cat warn" title="Could not be read automatically -- review it manually">unreadable</span>`;
   }
+  if (f.digest_status === "duplicate") {
+    return `<span class="cat" title="Same content as another file in this dataroom -- read once">duplicate</span>`;
+  }
   if (f.digest_status) {
     const tags = (f.tags || []).map(t => TAG_LABELS[t] || t).join(", ");
     const how = f.digest_status === "read_visually" ? "read (scanned)" : "read";
     return `<span class="cat read" title="${escapeAttr2(tags)}">${how}${tags ? " &middot; " + escapeHtml(tags) : ""}</span>`;
   }
-  const t = tasks.find(t => t.task_key === "digest:" + f.id);
-  const state = !t ? (f.category || "uncategorized") : (t.status === "running" ? "reading..." : t.status === "failed" ? "read failed" : "queued to read");
+  const reading = tasks.some(t => (t.task_type === "read_files" || t.task_type === "digest_document") && (t.status === "pending" || t.status === "running"));
+  const state = reading ? "queued to read" : (f.category || "uncategorized");
   return `<span class="cat">${escapeHtml(state)}</span>`;
 }
 
@@ -912,12 +936,17 @@ async function uploadDataroom() {
 
   const { body, u } = result;
   const received = (body && body.uploaded) || [];
-  if (received.length === 0) {
+  const skipped = (body && body.skipped_duplicates) || 0;
+  const skippedNote = skipped ? ` &middot; ${skipped} duplicate file${skipped === 1 ? "" : "s"} skipped (already in this job)` : "";
+  if (received.length === 0 && skipped) {
+    u.doneTitle = `No new files &mdash; all ${skipped} were already uploaded to this job`;
+    u.doneDetail = "Duplicates are skipped so they aren't read (or paid for) twice.";
+  } else if (received.length === 0) {
     u.phase = "error";
     u.error = "The upload arrived, but no usable files were found in it (an empty zip, or only folders and system files).";
   } else {
     u.doneTitle = `Dataroom received &mdash; ${received.length} file${received.length === 1 ? "" : "s"} processed in ${formatElapsed(u.finishedAt - u.startedAt)}`;
-    u.doneDetail = summarizeCategories(received);
+    u.doneDetail = summarizeCategories(received) + skippedNote;
   }
   await renderJob();
 }
@@ -974,6 +1003,15 @@ async function runStage(stage) {
     await api("POST", "/jobs/" + currentJobId + "/" + stage);
     await renderJob();
   } catch (e) { alert("Could not start " + stage + ": " + e.message); }
+}
+
+async function restartStage2() {
+  if (!confirm("Discard the current draft (and any QA / gap analysis after it) and draft the report again from the documents already read? Reading is not repeated.")) return;
+  try {
+    await api("POST", "/jobs/" + currentJobId + "/stage2/restart");
+    openSections.clear();
+    await renderJob();
+  } catch (e) { alert("Could not restart Stage 2: " + e.message); }
 }
 
 async function retryFailedTasks() {

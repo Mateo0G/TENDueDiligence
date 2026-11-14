@@ -144,6 +144,32 @@ class DocumentDigest(BaseModel):
     )
 
 
+class CompactDigest(BaseModel):
+    """What the (cheap, fast) reading model returns per document. Several
+    documents are read in one call, so `doc` says which one this is.
+
+    Length is what drives cost: every digest goes into the evidence pack
+    that all ~24 drafting calls read, so routine documents get a line or
+    two and only the documents that matter get long fact lists."""
+    doc: int = Field(description="The document's number as given in the prompt")
+    document_type: str = Field(description='e.g. "convertible promissory note", "5-year financial model", "offer letter"')
+    document_date: str = Field(description='Date the document bears or was last updated, as written; "" if none')
+    parties: list[str] = Field(description="People/organizations who are parties to, authors of, or the subject of it")
+    execution_status: Literal["executed", "unsigned_or_draft", "not_applicable", "unclear"]
+    tags: list[EvidenceTag] = Field(description="Every report this document is evidence for -- usually 1-4")
+    importance: int = Field(description="1-5: how central this document is to an investor's diligence")
+    summary: str = Field(description="1-3 dense sentences: what the document is and what it establishes")
+    key_facts: list[str] = Field(
+        description="Material facts with exact figures/names/dates/terms, each self-contained, with a page or "
+                    "sheet reference in parentheses when known. Routine documents: 0-2. Important ones: up to 18."
+    )
+    issues: list[str] = Field(description="Unsigned, blank fields, inconsistencies, expired dates, unusual terms")
+
+
+class ReadOutput(BaseModel):
+    documents: list[CompactDigest]
+
+
 # ------------------------------------------------------------- key facts --
 
 class KeyFact(BaseModel):
@@ -186,6 +212,19 @@ class QAScoreOutput(BaseModel):
     score: float | None = None
     summary: str
     findings: list[str] = Field(default_factory=list)
+
+
+class QAAssessment(BaseModel):
+    task_key: str = Field(description="The check's key exactly as given")
+    score: float | None = Field(description="On the check's stated scale; null for a check with no score")
+    summary: str
+    findings: list[str]
+
+
+class QAAllOutput(BaseModel):
+    """Every Stage 4 check answered in one call (they all read the same
+    report and evidence, so one call costs a fraction of ~22)."""
+    assessments: list[QAAssessment]
 
 
 class GapItem(BaseModel):

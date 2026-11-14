@@ -9,7 +9,9 @@ document block / image block), which the per-file digest step uses -- see
 app/tasks/digest_document.py.
 """
 import base64
+import hashlib
 import io
+import re
 
 import openpyxl
 from docx import Document as DocxDocument
@@ -32,7 +34,11 @@ IMAGE_MEDIA_TYPES = {
 # as scanned (signed agreements, faxed letters): its text layer is empty or
 # just page furniture, so Claude reads the page images instead.
 _SCANNED_CHARS_PER_PAGE = 120
-_MAX_VISUAL_PDF_PAGES = 60
+# Page images are the most expensive input there is (~1.5-3k tokens a
+# page). Scanned dataroom documents are overwhelmingly signed agreements,
+# letters and certificates, whose substance is on the first pages and whose
+# signatures/dates are on the last -- so send the first four and the last.
+_MAX_VISUAL_PDF_PAGES = 5
 _MAX_VISUAL_BYTES = 20 * 1024 * 1024
 _MAX_IMAGE_BYTES = 5 * 1024 * 1024
 
@@ -91,16 +97,42 @@ def visual_source(filename: str, data: bytes, extracted_text: str) -> dict | Non
     pdf_bytes = data
     if n_pages > _MAX_VISUAL_PDF_PAGES or len(data) > _MAX_VISUAL_BYTES:
         keep = min(_MAX_VISUAL_PDF_PAGES, max(1, int(n_pages * _MAX_VISUAL_BYTES / max(len(data), 1))))
+        indexes = list(range(keep - 1)) + [n_pages - 1] if keep > 1 else [0]
         writer = PdfWriter()
-        for page in reader.pages[:keep]:
-            writer.add_page(page)
+        for i in indexes:
+            writer.add_page(reader.pages[i])
         buffer = io.BytesIO()
         writer.write(buffer)
         pdf_bytes = buffer.getvalue()
         if len(pdf_bytes) > _MAX_VISUAL_BYTES:
             return None
     return {"type": "document", "source": {"type": "base64", "media_type": "application/pdf",
-                                           "data": base64.b64encode(pdf_bytes).decode()}}
+                                           "data": base64.b64encode(pdf_bytes).decode()},
+            "_pages_sent": min(n_pages, _MAX_VISUAL_PDF_PAGES), "_pages_total": n_pages}
+
+
+def api_block(visual: dict) -> dict:
+    """The visual block without this module's bookkeeping keys (the API
+    rejects unknown fields)."""
+    return {k: v for k, v in visual.items() if not k.startswith("_")}
+
+
+def text_hash(text: str) -> str:
+    """Identity of a document's *content*: the same agreement exported twice
+    (different bytes, same words) hashes the same."""
+    return hashlib.sha256(re.sub(r"\W+", "", text.lower()).encode()).hexdigest()
+
+
+def reading_excerpt(text: str, cap: int) -> str:
+    """At most `cap` characters of a document for the reading model: the
+    opening (parties, recitals, economic terms, the summary sheet) and the
+    end (signatures, dates, schedules, totals)."""
+    if len(text) <= cap:
+        return text
+    head = int(cap * 0.82)
+    tail = cap - head
+    return (f"{text[:head]}\n\n[... {len(text) - cap:,} characters omitted from the middle of this document ...]\n\n"
+            f"{text[-tail:]}")
 
 
 def _extract_pdf(data: bytes) -> str:

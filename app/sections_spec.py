@@ -15,7 +15,7 @@ depending on earlier ones so the report reads as one piece.
 Keys and titles are fixed here, never taken from the model, so compile,
 ordering, and the docx's TOC are deterministic.
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 INTRO = "_intro"
 
@@ -241,9 +241,9 @@ REPORTS: tuple[Report, ...] = (
             "status quo), with a table of categories."),
         Sub("profiles", "Competitor Profiles", "Competitor Profiles",
             "8-12 numbered profiles (H3 '1. Name' etc.) covering every competitor or alternative named in "
-            "the dataroom plus the important ones found by web search: what they offer, ownership/"
+            "the dataroom plus the important ones in the web research memo: what they offer, ownership/"
             "funding, regulatory status, pricing, market presence, strengths, weaknesses, and threat to "
-            "the company. Use web search to verify current facts."),
+            "the company. Use the web research memo for current public facts."),
         Sub("comparison", "Comparison of Offerings", "Comparison of Offerings",
             "Feature/attribute comparison table of the company vs. each competitor."),
         Sub("threat", "Threat Assessment", "Threat Assessment",
@@ -294,9 +294,9 @@ REPORTS: tuple[Report, ...] = (
             "The company's stated exit plan (type, timing, target value, likely buyers) and its basis."),
         Sub("cited_comps", "Comparable Transactions Cited by {company}", "Comparable Transactions Cited by CARI Health",
             "Table of every comparable the company cites (target | acquirer | year | value | multiple | "
-            "relevance), verified by web search, with the Team's view of each one's relevance."),
+            "relevance), verified against the web research memo, with the Team's view of each one's relevance."),
         Sub("more_comps", "Five Additional Comparable Exits", "Five Additional Comparable Exits",
-            "Five further relevant exits found by web search, in a table with the same columns, sourced."),
+            "Five further relevant exits from the web research memo, in a table with the same columns, sourced."),
         Sub("roi", "Estimated ROI to {company} Investors Based on Comparable Exits",
             "Estimated ROI to CARI Health Investors Based on Comparable Exits",
             "Exit value scenarios (low/base/high) from the comparables, the investor's ownership after "
@@ -307,7 +307,7 @@ REPORTS: tuple[Report, ...] = (
     )),
     Report("acquirers", "Potential Acquirers Report", "Exit Strategy Section of the Due Diligence Report",
            "Potential Acquirers Report", 12, (
-        _intro("After the callout, give a table of 8-15 named potential acquirers found by web search "
+        _intro("After the callout, give a table of 8-15 named potential acquirers from the web research memo "
                "(acquirer | type | why a fit | relevant recent deals | likelihood), grouped by tier."),
         Sub("paths", "Most Likely Exit Paths", "Most Likely Exit Paths",
             "The 2-4 most likely exit paths, each with buyer type, timing trigger and indicative value."),
@@ -381,15 +381,26 @@ REPORT_BY_KEY: dict[str, Report] = {r.key: r for r in REPORTS}
 
 @dataclass(frozen=True)
 class SectionSpec:
-    """One Stage 2 drafting task: writes `subs` (in order) of one report."""
+    """One Stage 2 drafting task: writes `subs` (in order) of one report.
+
+    Report parts no longer depend on one another: they all draft in
+    parallel against the same Key Facts sheet and evidence pack (which is
+    what keeps their figures consistent), and each is told what its sibling
+    parts cover so it doesn't repeat them. Only the summary-layer parts
+    (exit summary, open items, executive summary) wait for drafted text.
+    The old chains (e.g. financial_1 -> financial_2 -> exit_report ->
+    acquirers -> exit_recs -> exit_summary -> executive_summary) made Stage
+    2 eight sequential calls long."""
     task_key: str
     report: str
     subs: tuple[str, ...]
     evidence_tags: tuple[str, ...]
     depends_on: tuple[str, ...] = ()
-    needs_web_search: bool = False
     summary_context: bool = False   # dependencies rendered as summaries, not in full
     instruction: str = ""
+    # Characters of primary-source text (the model, cap table, statements)
+    # added for reports where exact numbers are the point.
+    source_chars: int = 0
 
     @property
     def section_keys(self) -> tuple[str, ...]:
@@ -403,54 +414,50 @@ _DRAFT_SPECS: list[SectionSpec] = [
     SectionSpec("commercial_1", "commercial", (INTRO, "sales", "models", "marketing", "customer_input"),
                 ("commercial", "financial", "competition", "regulatory")),
     SectionSpec("commercial_2", "commercial", ("market_size", "swot", "conclusion"),
-                ("commercial", "financial", "competition"), depends_on=("commercial_1",), needs_web_search=True),
+                ("commercial", "financial", "competition")),
     SectionSpec("financial_1", "financial", (INTRO, "assumptions", "historical", "proforma"),
-                ("financial", "deal_terms", "commercial")),
+                ("financial", "deal_terms", "commercial"), source_chars=30_000),
     SectionSpec("financial_2", "financial", ("investment", "use_of_funds", "sufficiency", "valuation"),
-                ("financial", "deal_terms", "corporate"), depends_on=("financial_1",)),
+                ("financial", "deal_terms", "corporate"), source_chars=15_000),
     SectionSpec("financial_3", "financial", ("reasons", "risks", "conclusion"),
-                ("financial", "deal_terms"), depends_on=("financial_1", "financial_2")),
+                ("financial", "deal_terms")),
     SectionSpec("scitech_1", "scitech", (INTRO, "technical", "unique", "risks"),
                 ("science_tech", "regulatory", "manufacturing", "ip")),
     SectionSpec("scitech_2", "scitech", ("manufacturing", "suppliers", "followup"),
-                ("manufacturing", "science_tech", "contracts"), depends_on=("scitech_1",)),
+                ("manufacturing", "science_tech", "contracts")),
     SectionSpec("hr_1", "hr", (INTRO,), ("team", "contracts", "corporate", "financial")),
     SectionSpec("hr_2", "hr", ("mgmt_bios", "board_bios", "advisory_bios"), ("team",)),
     SectionSpec("corp_legal", "corp_legal", (INTRO, "corporate", "deal", "findings", "checklist", "followup"),
-                ("corporate", "deal_terms", "financial")),
+                ("corporate", "deal_terms", "financial"), source_chars=12_000),
     SectionSpec("ip", "ip", (INTRO, "dates", "strengths", "weaknesses", "followup"),
                 ("ip", "science_tech", "contracts", "team")),
     SectionSpec("competition_1", "competition", (INTRO, "landscape", "profiles"),
-                ("competition", "commercial", "science_tech"), needs_web_search=True),
+                ("competition", "commercial", "science_tech")),
     SectionSpec("competition_2", "competition",
                 ("comparison", "threat", "trends", "opps_threats", "strategic", "sources"),
-                ("competition", "commercial"), depends_on=("competition_1",), needs_web_search=True),
+                ("competition", "commercial")),
     SectionSpec("competition_supp", "competition_supp",
                 (INTRO, "part_a", "part_b", "part_c", "part_d", "next_steps", "sources"),
-                ("competition", "commercial", "science_tech"),
-                depends_on=("competition_1", "competition_2"), needs_web_search=True),
+                ("competition", "commercial", "science_tech")),
     SectionSpec("exit_report", "exit_report", (INTRO, "proposed", "cited_comps", "more_comps", "roi", "swot"),
-                ("exit", "financial", "deal_terms", "competition"),
-                depends_on=("financial_2",), needs_web_search=True),
-    SectionSpec("acquirers", "acquirers", (INTRO, "paths"), ("exit", "competition", "commercial"),
-                depends_on=("exit_report", "competition_1"), needs_web_search=True),
-    SectionSpec("exit_recs", "exit_recs", (INTRO, "recs"), ("exit", "contracts", "manufacturing"),
-                depends_on=("exit_report", "acquirers")),
-    SectionSpec("exit_summary", "exit_summary", (INTRO, "key_facts", "findings", "reasons", "risks"),
-                ("exit", "financial"), depends_on=("exit_report", "acquirers", "exit_recs")),
+                ("exit", "financial", "deal_terms", "competition")),
+    SectionSpec("acquirers", "acquirers", (INTRO, "paths"), ("exit", "competition", "commercial")),
+    SectionSpec("exit_recs", "exit_recs", (INTRO, "recs"), ("exit", "contracts", "manufacturing")),
     SectionSpec("contracts_1", "contracts", (INTRO, "corporate", "material"),
                 ("contracts", "team", "manufacturing", "corporate", "commercial")),
     SectionSpec("contracts_2", "contracts", ("deal", "summary"),
-                ("deal_terms", "contracts", "corporate"), depends_on=("contracts_1",)),
+                ("deal_terms", "contracts", "corporate")),
     SectionSpec("regulatory_1", "regulatory", (INTRO, "background", "product", "path", "strategy", "completed"),
                 ("regulatory", "science_tech")),
     SectionSpec("regulatory_2", "regulatory", ("qms", "clinical", "timeline", "conclusion"),
-                ("regulatory", "science_tech", "contracts"), depends_on=("regulatory_1",)),
+                ("regulatory", "science_tech", "contracts")),
 ]
 
 _SUMMARY_DEPS = tuple(s.task_key for s in _DRAFT_SPECS)
 
 _FINAL_SPECS: list[SectionSpec] = [
+    SectionSpec("exit_summary", "exit_summary", (INTRO, "key_facts", "findings", "reasons", "risks"),
+                ("exit", "financial"), depends_on=("exit_report", "acquirers", "exit_recs")),
     SectionSpec("open_items", "open_items", (INTRO,), (), depends_on=_SUMMARY_DEPS, summary_context=True,
                 instruction="Collect the open items from the drafted reports (provided as prior context) "
                             "and the Key Facts sheet's missing-documents list."),

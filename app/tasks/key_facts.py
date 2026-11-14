@@ -1,8 +1,9 @@
-"""Stage 2 task: build the job's Key Facts sheet from every file's digest,
-so all 24 drafting calls state the same round size, valuation, dates,
-people and product description, and resolve conflicting sources the same
-way. Never blocks drafting: on its last attempt a failure stores an error
-marker and drafting proceeds from the documents directly.
+"""Stage 2 task: build the job's Key Facts sheet from the evidence pack (the
+digest of every unique document), so all drafting calls state the same
+round size, valuation, dates, people and product description, and resolve
+conflicting sources the same way. Never blocks drafting: on its last
+attempt a failure stores an error marker and drafting proceeds from the
+evidence pack directly.
 """
 from app import claude_client, evidence, repo
 from app.tasks.registry import register
@@ -12,10 +13,8 @@ from app.tasks.registry import register
 def run_key_facts(task: dict) -> dict:
     payload = task["payload"]
     job_id = payload["job_id"]
-    files = repo.list_dataroom_files(job_id)
-    digests_text = "\n\n".join(evidence.render_digest(f) for f in files)
     try:
-        result = claude_client.extract_key_facts(payload["company_name"], digests_text)
+        result = claude_client.extract_key_facts(payload["company_name"], evidence.build_pack(job_id))
     except Exception as exc:
         if task["attempts"] + 1 < repo.MAX_TASK_ATTEMPTS:
             raise

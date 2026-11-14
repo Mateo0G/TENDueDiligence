@@ -5,7 +5,7 @@ import signal
 import socket
 import time
 
-from app import repo
+from app import repo, usage
 from app.tasks.registry import get_handler
 import app.tasks  # noqa: F401  (registers handlers)
 
@@ -24,7 +24,12 @@ POLL_INTERVAL_SECONDS = 1.0
 # at the same time instead of strictly one-after-another; the dependent
 # chains (e.g. executive_summary waiting on everything) still serialize
 # themselves naturally through depends_on.
-WORKER_CONCURRENCY = int(os.environ.get("WORKER_CONCURRENCY", "6"))
+#
+# 12 slots: Stage 2's drafting wave is 21 independent calls, and with the
+# shared evidence served from the prompt cache each call's uncached input is
+# small (cache reads don't count against input-token rate limits), so more
+# of them can run at once without hitting rate limits.
+WORKER_CONCURRENCY = int(os.environ.get("WORKER_CONCURRENCY", "12"))
 
 _shutdown_requested = False
 
@@ -44,7 +49,8 @@ def run_one_task(worker_id: str) -> bool:
     log.info("[%s] claimed task %s (%s / %s)", worker_id, task["id"], task["task_type"], task["task_key"])
     try:
         handler = get_handler(task["task_type"])
-        result = handler(task)
+        with usage.task_context(task["job_id"], task["id"]):
+            result = handler(task)
     except Exception as exc:
         log.exception("[%s] task %s failed", worker_id, task["id"])
         repo.fail_task(task["id"], str(exc))

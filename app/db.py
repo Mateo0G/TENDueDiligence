@@ -12,8 +12,8 @@ from app.config import DATABASE_URL
 pool = ConnectionPool(
     # max_size covers the web service's own request handling plus the
     # worker's concurrent task slots (app/worker.py's WORKER_CONCURRENCY,
-    # default 6) -- each only holds a connection for one short query, not for
+    # default 12) -- each only holds a connection for one short query, not for
     # the lifetime of a task, but enough slots must fit at once to avoid
     # queuing behind the pool itself.
-    DATABASE_URL, min_size=1, max_size=10, open=True, check=ConnectionPool.check_connection
+    DATABASE_URL, min_size=1, max_size=16, open=True, check=ConnectionPool.check_connection
 )

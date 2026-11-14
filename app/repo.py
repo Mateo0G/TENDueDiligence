@@ -12,12 +12,20 @@ from app.db import pool
 # dependencies (if any) have all completed, and mark it running in the same
 # statement. FOR UPDATE SKIP LOCKED means concurrent workers never block on
 # each other and never double-claim the same row.
-_CLAIM_SQL = """
+#
+# A task still 'running' long after it was claimed belongs to a worker that
+# died mid-task (a redeploy kills the worker process) -- it is reclaimed
+# rather than left 'running' forever with everything downstream stuck
+# behind it. No task legitimately runs anywhere near this long.
+STALE_LOCK_MINUTES = 30
+
+_CLAIM_SQL = f"""
     UPDATE tasks
     SET status = 'running', locked_by = %(worker_id)s, locked_at = now(), updated_at = now()
     WHERE id = (
         SELECT id FROM tasks
-        WHERE status = 'pending'
+        WHERE (status = 'pending'
+               OR (status = 'running' AND locked_at < now() - interval '{STALE_LOCK_MINUTES} minutes'))
           AND NOT EXISTS (
               SELECT 1 FROM tasks dep
               WHERE dep.id = ANY(tasks.depends_on) AND dep.status <> 'completed'
@@ -377,12 +385,15 @@ def add_dataroom_file(
     category_method: Optional[str],
     size_bytes: int,
     content_type: Optional[str],
+    sha256: Optional[str] = None,
+    source_path: Optional[str] = None,
 ) -> str:
     with pool.connection() as conn:
         row = conn.execute(
             "INSERT INTO dataroom_files "
-            "(job_id, object_key, original_filename, file_kind, category, category_method, size_bytes, content_type) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+            "(job_id, object_key, original_filename, file_kind, category, category_method, size_bytes, "
+            "content_type, sha256, source_path) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
             (
                 job_id,
                 object_key,
@@ -392,9 +403,99 @@ def add_dataroom_file(
                 category_method,
                 size_bytes,
                 content_type,
+                sha256,
+                source_path,
             ),
         ).fetchone()
         return str(row[0])
+
+
+def find_file_by_sha256(job_id, sha256: str) -> Optional[dict]:
+    with pool.connection() as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                "SELECT * FROM dataroom_files WHERE job_id=%s AND sha256=%s ORDER BY created_at LIMIT 1",
+                (job_id, sha256),
+            )
+            return cur.fetchone()
+
+
+def find_digest_by_text_hash(job_id, text_hash: str, exclude_file_id) -> Optional[dict]:
+    """Another file in this job whose extracted text is identical (same
+    document saved twice with different bytes, e.g. re-exported PDFs) and
+    already has a real digest."""
+    with pool.connection() as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                "SELECT id, original_filename, digest FROM dataroom_files "
+                "WHERE job_id=%s AND id<>%s AND digest->>'text_hash'=%s AND digest->>'duplicate_of' IS NULL "
+                "LIMIT 1",
+                (job_id, exclude_file_id, text_hash),
+            )
+            return cur.fetchone()
+
+
+def count_dataroom_files(job_id) -> int:
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM dataroom_files WHERE job_id=%s", (job_id,))
+            return cur.fetchone()[0]
+
+
+def set_job_research(job_id, research: dict) -> None:
+    with pool.connection() as conn:
+        conn.execute("UPDATE jobs SET research=%s, updated_at=now() WHERE id=%s", (Json(research), job_id))
+
+
+def record_api_usage(job_id, task_id, purpose: str, model: str, input_tokens: int, output_tokens: int,
+                     cache_write_tokens: int, cache_read_tokens: int, web_searches: int, cost_usd: float) -> None:
+    with pool.connection() as conn:
+        conn.execute(
+            "INSERT INTO api_usage (job_id, task_id, purpose, model, input_tokens, output_tokens, "
+            "cache_write_tokens, cache_read_tokens, web_searches, cost_usd) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (job_id, task_id, purpose, model, input_tokens, output_tokens, cache_write_tokens,
+             cache_read_tokens, web_searches, cost_usd),
+        )
+
+
+def job_usage_summary(job_id) -> list[dict]:
+    """Per purpose: call count, token totals and cost."""
+    with pool.connection() as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                "SELECT purpose, model, count(*) AS calls, sum(input_tokens) AS input_tokens, "
+                "sum(output_tokens) AS output_tokens, sum(cache_write_tokens) AS cache_write_tokens, "
+                "sum(cache_read_tokens) AS cache_read_tokens, sum(web_searches) AS web_searches, "
+                "sum(cost_usd) AS cost_usd FROM api_usage WHERE job_id=%s "
+                "GROUP BY purpose, model ORDER BY sum(cost_usd) DESC",
+                (job_id,),
+            )
+            return cur.fetchall()
+
+
+def job_total_cost(job_id) -> float:
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT coalesce(sum(cost_usd), 0) FROM api_usage WHERE job_id=%s", (job_id,))
+            return float(cur.fetchone()[0])
+
+
+def delete_stage_tasks(job_id, min_stage: int) -> int:
+    """Remove every task of stage >= min_stage (and the drafted sections),
+    so the stage can be started again from scratch. Everything produced
+    downstream of the draft (QA scores, gap analysis, approval) goes too --
+    it described the old draft."""
+    with pool.connection() as conn:
+        cur = conn.execute("DELETE FROM tasks WHERE job_id=%s AND stage>=%s", (job_id, min_stage))
+        conn.execute("DELETE FROM report_sections WHERE job_id=%s", (job_id,))
+        conn.execute("DELETE FROM qa_scores WHERE job_id=%s", (job_id,))
+        conn.execute(
+            "UPDATE jobs SET status='pending', draft_approved_at=NULL, key_facts=NULL, research=NULL, "
+            "gap_analysis=NULL, mitigation_strategy=NULL, updated_at=now() WHERE id=%s",
+            (job_id,),
+        )
+        return cur.rowcount
 
 
 def upsert_report_section(

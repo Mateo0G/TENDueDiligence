@@ -15,11 +15,13 @@ from docx import Document as DocxDocument
 REFERENCE_DOCX_PATH = "reference/AccuBreath_Due_Diligence_Report.docx"
 STYLE_GUIDE_PATH = "reference/style_guide.json"
 
-# Per-call budget for the example text. Long subsections (CARI's competitor
-# profiles, material contracts) are cut -- the model needs the pattern, not
-# all ten profiles.
-MAX_STYLE_CHARS_PER_SUB = 9_000
-MAX_STYLE_CHARS_TOTAL = 40_000
+# Per-call budget for the example text. Unlike the job's evidence, this part
+# of the prompt differs per call, so it is paid at the full input price on
+# every one of ~24 calls. Long subsections (CARI's competitor profiles,
+# material contracts) are cut -- the model needs the pattern (voice, table
+# design, depth per item), not all ten profiles.
+MAX_STYLE_CHARS_PER_SUB = 4_500
+MAX_STYLE_CHARS_TOTAL = 18_000
 
 
 @functools.lru_cache(maxsize=1)
@@ -49,6 +51,15 @@ def style_excerpt(style_h1: str, style_h2s: list[str]) -> str:
         parts.append(chunk)
         total += len(chunk)
     return "\n\n".join(parts)
+
+
+def reference_words(style_h1: str, style_h2: str) -> int | None:
+    """How long the client-approved report's version of this subsection is,
+    in words (tables included). Drafting targets this length: it is the
+    standard the client approved, and unbounded drafts ran to twice the
+    reference's length -- output tokens being the largest cost there is."""
+    text = _style_guide().get(style_h1, {}).get(style_h2)
+    return len(text.split()) if text else None
 
 
 @functools.lru_cache(maxsize=1)

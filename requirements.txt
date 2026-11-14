@@ -12,4 +12,8 @@ python-multipart>=0.0.9
 httpx>=0.27
 anthropic>=0.69
 pypdf>=4.2
+# pypdf needs this to open AES-encrypted PDFs -- DocuSign/e-signed agreements,
+# board consents and offer letters are usually encrypted, and without it every
+# one of them came back unreadable.
+cryptography>=42
 python-pptx>=1.0
