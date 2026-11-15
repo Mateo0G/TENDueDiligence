@@ -373,6 +373,13 @@ def build_user_content(job_id: str, company_name: str, spec: SectionSpec) -> str
     excerpts = evidence.source_excerpts(job_id, spec.evidence_tags, spec.source_chars)
     if excerpts:
         lines += ["", "### Primary-source text (for exact figures; the evidence pack has the digests)", excerpts]
+    if not spec.summary_context:
+        query = " ".join([title] + [f"{report.sub(s).title} {report.sub(s).guidance}" for s in spec.subs])
+        query = query.format(company=company_name) if "{company}" in query else query
+        pages = evidence.retrieve_pages(job_id, query)
+        if pages:
+            lines += ["", "### Verbatim data-room pages most relevant to this part (from a search over every page; "
+                          "use them for exact terms, figures and dates)", pages]
     dependency_context = build_dependency_context(job_id, spec)
     if dependency_context:
         header = ("### The drafted reports" if spec.summary_context
@@ -392,7 +399,18 @@ def build_drafting_inputs(job_id: str, company_name: str, spec: SectionSpec) -> 
     return {
         "context": evidence.drafting_context(job_id),
         "user_content": build_user_content(job_id, company_name, spec),
+        "target_words": target_words(spec),
     }
+
+
+def target_words(spec: SectionSpec) -> int:
+    """The reference report's length for the parts one call writes."""
+    report = REPORT_BY_KEY[spec.report]
+    total = 0
+    for sub_key in spec.subs:
+        words = reference_words(report.style_h1, report.sub(sub_key).style_h2)
+        total += min(max(words, 150), 1800) if words else 600
+    return total
 
 
 # ---------------------------------------------------------- persistence --

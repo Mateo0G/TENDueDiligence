@@ -342,3 +342,66 @@ def qa_evidence(job_id) -> str:
     job = repo.get_job(job_id)
     return ("### Key Facts sheet\n" + render_key_facts(job.get("key_facts"))
             + "\n\n### Dataroom evidence pack (condensed)\n" + build_pack(job_id, QA_PACK_CHARS, include_deck=False))
+
+
+# ------------------------------------------------------------- retrieval --
+# Every page of every file is extracted (app/ingest.py) but fact cards
+# summarize; for exact clauses and figures each drafting call also gets the
+# verbatim pages that best match what it is writing, from a BM25 keyword
+# search over every page in the data room (local, free).
+
+RETRIEVAL_CHARS = 20_000      # ~5.5k tokens of verbatim pages per drafting call
+_CHUNK = 3_500
+_STOP = set("the a an and or of to in on for by with at from as is are was were be been this that these those it its "
+            "their his her our your any all each per not no shall will may must which who whom such other than then "
+            "into upon under over between including include includes table section report company".split())
+_index_cache: dict = {}
+
+
+def _tokens(text: str) -> list[str]:
+    return [t for t in re.findall(r"[a-z0-9$%][a-z0-9$%.,/-]*[a-z0-9%]|[a-z0-9]", text.lower()) if t not in _STOP]
+
+
+def _page_index(job_id):
+    """BM25 index over page chunks of the job (built once per worker per
+    page count, so the drafting wave shares it)."""
+    from rank_bm25 import BM25Okapi
+
+    pages = repo.list_document_pages(job_id)
+    key = (str(job_id), len(pages))
+    if key in _index_cache:
+        return _index_cache[key]
+    chunks = []
+    for p in pages:
+        text = p["text"] or ""
+        for start in range(0, max(len(text), 1), _CHUNK):
+            piece = text[start:start + _CHUNK].strip()
+            if len(piece) > 80:
+                chunks.append({"path": p["source_path"] or p["original_filename"], "page": p["page_no"],
+                               "label": p["label"], "text": piece})
+    index = (BM25Okapi([_tokens(c["text"]) or ["_"] for c in chunks]), chunks) if chunks else (None, [])
+    _index_cache.clear()  # one job at a time per worker is the norm; keep memory flat
+    _index_cache[key] = index
+    return index
+
+
+def retrieve_pages(job_id, query: str, budget: int = RETRIEVAL_CHARS) -> str:
+    try:
+        bm25, chunks = _page_index(job_id)
+    except Exception:
+        return ""
+    if bm25 is None:
+        return ""
+    scores = bm25.get_scores(_tokens(query))
+    order = sorted(range(len(chunks)), key=lambda i: -scores[i])
+    out, used, seen = [], 0, set()
+    for i in order[:60]:
+        c = chunks[i]
+        if scores[i] <= 0 or (c["path"], c["page"]) in seen:
+            continue
+        if used + len(c["text"]) > budget:
+            continue
+        seen.add((c["path"], c["page"]))
+        out.append(f"--- {c['path']}, page {c['page']}{(' (' + c['label'] + ')') if c['label'] else ''} ---\n{c['text']}")
+        used += len(c["text"])
+    return "\n\n".join(out)

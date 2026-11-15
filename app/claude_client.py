@@ -19,7 +19,7 @@ import os
 
 import anthropic
 
-from app import usage
+from app import model_config, usage
 from app.models import (
     DraftingOutput,
     FactCardOutput,
@@ -31,17 +31,18 @@ from app.models import (
 )
 from app.qa_spec import QASpec
 
-DRAFTING_MODEL = "claude-sonnet-5"
-QA_MODEL = os.environ.get("QA_MODEL", "claude-sonnet-5")
-GAP_MITIGATION_MODEL = "claude-sonnet-5"
-KEY_FACTS_MODEL = "claude-sonnet-5"
-RESEARCH_MODEL = "claude-sonnet-5"
-# Reading the dataroom: Haiku is ~3x cheaper than Sonnet per input token and
-# much faster; its job is extraction (figures, dates, parties, terms), not
-# judgment -- the drafting model does the analysis. Override with READ_MODEL.
-READ_MODEL = os.environ.get("READ_MODEL", "claude-haiku-4-5-20251001")
+# Model IDs and prices: app/model_config.py (one place, env-overridable).
+DRAFTING_MODEL = model_config.DRAFTING_MODEL
+QA_MODEL = model_config.QA_MODEL
+GAP_MITIGATION_MODEL = model_config.GAP_MITIGATION_MODEL
+KEY_FACTS_MODEL = model_config.KEY_FACTS_MODEL
+RESEARCH_MODEL = model_config.RESEARCH_MODEL
+READ_MODEL = model_config.READ_MODEL
 DRAFTING_EFFORT = os.environ.get("DRAFTING_EFFORT", "medium")
-RESEARCH_MAX_SEARCHES = int(os.environ.get("RESEARCH_MAX_SEARCHES", "8"))
+# Sonnet 5 runs adaptive thinking by default; its hidden reasoning was about
+# half of all drafting output tokens. "adaptive" keeps it, "disabled" turns
+# it off (see the A/B endpoint, POST /jobs/{id}/ab-draft).
+DRAFTING_THINKING = os.environ.get("DRAFTING_THINKING", "adaptive")
 
 # 5-minute TTL: every drafting call that reads the prefix refreshes it, and
 # the wave runs back to back, so it never lapses in practice -- the 1-hour
@@ -56,7 +57,7 @@ def _client() -> anthropic.Anthropic:
 
 
 def _supports_effort(model: str) -> bool:
-    return not model.startswith("claude-haiku-4")
+    return model_config.supports_effort(model)
 
 
 def _strict_schema(schema):
@@ -179,6 +180,7 @@ def build_fact_card_request(company_name: str, entries: list) -> dict:
         parts.append(f"=== Document {n} ===\nPath: {path}{(' -- ' + note) if note else ''}\n\n{text}")
     return dict(
         model=READ_MODEL,
+        **model_config.no_thinking(READ_MODEL),
         max_tokens=24000,
         system=READ_SYSTEM_PROMPT,
         output_config=_output_config(FactCardOutput, "low", READ_MODEL),
@@ -239,6 +241,7 @@ def transcribe_page(png: bytes, path: str, page_no: int) -> str:
     response = _create(
         _client(), "read_visual",
         model=READ_MODEL,
+        **model_config.no_thinking(READ_MODEL),
         max_tokens=4000,
         system="You transcribe one scanned page from a due diligence data room. Output only the page's text, "
                "tables as pipe-separated rows. For signatures write [signed: name if legible] or [signature line "
@@ -254,6 +257,7 @@ def check_signature_page(png: bytes, path: str, page_no: int) -> str:
     response = _create(
         _client(), "read_signature",
         model=READ_MODEL,
+        **model_config.no_thinking(READ_MODEL),
         max_tokens=20,
         system="You look at one signature page of an agreement. Answer with exactly one word: yes if it carries "
                "signatures (handwritten, pasted image, or e-signature marks), no if the signature lines are blank, "
@@ -300,74 +304,194 @@ def extract_key_facts(company_name: str, pack_text: str) -> KeyFactsOutput:
 RESEARCH_SYSTEM_PROMPT = """\
 You are the market-research analyst on TEN Capital Network's due diligence \
 team. Using web search, gather the public facts the report writers need and \
-write them up as a dense research memo. Report writers cannot search, so \
-anything you do not record here will be missing from the report.
+write them up as a dense research memo section. The report writers cannot \
+search, so anything you do not record here will be missing from the report.
 
 Be specific and current: names, dates, amounts, product details, regulatory \
 status, prices. Prefer primary and reputable sources (company sites, SEC \
 filings, FDA databases, press releases, peer-reviewed or analyst reports). \
-After every fact give its source in brackets: [publisher, date, URL]. If \
-something cannot be found, say so in one line rather than guessing.
+After every fact give its source in brackets: [publisher, date, URL].
+
+If something cannot be established, add it to a final "Follow-up items" \
+list as a specific action (e.g. "Confirm ProciseDx's FDA clearance status \
+for its phenytoin assay with the company"). Never mention searches, search \
+tools, limits or caps -- the reader only needs facts and follow-ups.
 """
 
 RESEARCH_BRIEF = """\
-Research brief for {company}. Write the memo with exactly these headings:
+Research brief for {company} ({industry}). Write this part of the research \
+memo under exactly these headings:
 
-1. Market size and growth -- TAM/SAM figures with year and source, growth \
-rates, the key demand drivers, and the size of the specific segment this \
-company sells into.
-2. Competitors -- 8 to 12 direct and adjacent competitors. For each: name, \
-HQ, founded, funding raised / public status and latest valuation if known, \
-product and how it works (technology, specimen/input, setting), regulatory \
-status, pricing if public, customers/traction, and how it compares with \
-{company}'s product.
-3. Comparable transactions -- recent (last ~7 years) acquisitions and notable \
-financings in this space: acquirer, target, date, deal value, revenue or \
-stage at the time, multiple if known.
-4. Potential acquirers -- 8 to 12 strategic buyers with the rationale for \
-each (portfolio fit, relevant past acquisitions, stated strategy).
-5. Reimbursement, pricing and regulatory landscape -- codes, payment rates, \
-precedent clearances/approvals for similar products, relevant guidance.
-6. Industry trends and risks relevant to the investment.
+{topic}
 
-What the company and its documents say about itself (use this to aim your \
-searches; verify claims about competitors and the market independently):
+{seeds}
+What the company and its documents say about itself -- cover every \
+competitor, customer and acquirer they name, and verify their claims about \
+competitors and the market independently:
 
 {context}
 """
 
+# Four topics, each split into sub-calls of at most RESEARCH_SEARCHES_PER_CALL
+# searches: within one call every search step re-reads all earlier results,
+# so cost grows with the square of the searches per call (one call with 8
+# searches measured 629k input tokens, $2.22, ~12 min). Sub-calls run in
+# parallel. Results are cached per company and topic (research_cache).
+RESEARCH_TOPICS = [
+    ("competitors", [
+        ("""## Competitors (part 1)
+Profile the most important direct competitors of {company}, starting with \
+the candidates listed below that are relevant. For each: name, HQ, founded, \
+ownership / funding / latest valuation, product and how it works \
+(technology, specimen/input, setting, time to result), regulatory status, \
+pricing if public, customers and traction, and how it compares with \
+{company}'s product.""", "first"),
+        ("""## Competitors (part 2)
+Profile further direct and adjacent competitors of {company} -- the \
+remaining relevant candidates below and any important ones they omit -- \
+with the same fields: name, HQ, founded, ownership / funding, product and \
+how it works, regulatory status, pricing, traction, comparison.""", "second"),
+    ]),
+    ("acquirers_deals", [
+        ("""## Potential acquirers
+8 to 12 strategic or sponsor buyers for {company}, starting with the \
+relevant candidates below. For each: rationale (portfolio fit, stated \
+strategy) and its relevant acquisitions with dates and values.""", "acquirers"),
+        ("""## Comparable transactions
+Acquisitions and notable financings in {company}'s space in the last ~7 \
+years: acquirer, target, date, deal value, the target's revenue or stage at \
+the time, multiple if known.""", "acquirers"),
+    ]),
+    ("market", [
+        ("""## Market size and growth
+TAM/SAM figures with year and source, growth rates, demand drivers, and the \
+size of the specific segment {company} sells into (number of sites/patients \
+or tests, if applicable).""", None),
+        ("""## Industry trends and risks
+What an investor in {company} should know: technology, regulatory, \
+reimbursement, competitive and consolidation trends.""", None),
+    ]),
+    ("reimbursement", [
+        ("""## Reimbursement, pricing and regulatory landscape
+Billing codes and payment rates for this kind of product or test, payer \
+coverage, prices of comparable products, precedent clearances/approvals for \
+similar products, and relevant agency guidance.""", None),
+    ]),
+]
+RESEARCH_SEARCHES_PER_CALL = int(os.environ.get("RESEARCH_SEARCHES_PER_CALL", "3"))
+RESEARCH_CACHE_DAYS = int(os.environ.get("RESEARCH_CACHE_DAYS", "14"))
 
-def research_market(company_name: str, context: str) -> dict:
+
+def _search_tool(model: str) -> dict:
+    kind = "web_search_20250305" if model.startswith("claude-haiku-4") else "web_search_20260209"
+    return {"type": kind, "name": "web_search", "max_uses": RESEARCH_SEARCHES_PER_CALL}
+
+
+def _seed_text(industries: list[dict], which: str | None) -> str:
+    if not industries or which is None:
+        return ""
+    ind = industries[0]
+    if which == "acquirers":
+        names = ind["acquirers"]
+    else:
+        names = ind["competitors"]
+        half = (len(names) + 1) // 2
+        names = names[:half] if which == "first" else names[half:]
+    if not names:
+        return ""
+    return ("Candidates the Team expects to see covered in this space (include each one that is relevant, "
+            "and say briefly why any is not): " + "; ".join(names) + "\n")
+
+
+def _research_call(company_name: str, context: str, industry: str, heading: str, seeds: str,
+                   model: str) -> tuple[str, list[dict]]:
     client = _client()
-    messages = [{"role": "user", "content": RESEARCH_BRIEF.format(company=company_name, context=context)}]
-    params = dict(
-        model=RESEARCH_MODEL,
-        max_tokens=24000,
-        system=RESEARCH_SYSTEM_PROMPT,
-        tools=[{"type": "web_search_20260209", "name": "web_search", "max_uses": RESEARCH_MAX_SEARCHES}],
-        output_config={"effort": "medium"},
-    )
+    messages = [{"role": "user", "content": RESEARCH_BRIEF.format(
+        company=company_name, industry=industry or "industry as described below",
+        topic=heading.format(company=company_name), seeds=seeds, context=context)}]
+    params = dict(model=model, max_tokens=10000, system=RESEARCH_SYSTEM_PROMPT, tools=[_search_tool(model)],
+                  **model_config.no_thinking(model))
+    if _supports_effort(model):
+        params["output_config"] = {"effort": "low"}
     content = []
-    for _ in range(4):  # a long server-side search loop can pause; continue it
+    for _ in range(3):  # a server-side search loop can pause; continue it
         response = _create(client, "research", messages=messages, **params)
         content += list(response.content)
         if response.stop_reason != "pause_turn":
             break
         messages = messages + [{"role": "assistant", "content": response.content}]
-    memo, sources, seen = [], [], set()
+    memo, sources = [], []
     for block in content:
         if block.type != "text":
             continue
         memo.append(block.text)
         for c in getattr(block, "citations", None) or []:
-            url = getattr(c, "url", None)
-            if url and url not in seen:
-                seen.add(url)
-                sources.append({"url": url, "title": getattr(c, "title", "") or ""})
-    text = "".join(memo).strip()
-    if not text:
+            if getattr(c, "url", None):
+                sources.append({"url": c.url, "title": getattr(c, "title", "") or ""})
+    return "".join(memo).strip(), sources
+
+
+def research_market(company_name: str, context: str) -> dict:
+    """The research memo: one section per topic, from cache when this
+    company was researched within RESEARCH_CACHE_DAYS."""
+    import concurrent.futures
+    import contextvars
+    import re as _re
+
+    from app import industry_config, repo
+
+    industries = industry_config.detect(context)
+    industry = industries[0]["label"] if industries else ""
+    company_key = _re.sub(r"[^a-z0-9]+", "", company_name.lower())
+
+    def run(heading: str, which: str | None) -> tuple[str, list[dict]]:
+        seeds = _seed_text(industries, which)
+        try:
+            return _research_call(company_name, context, industry, heading, seeds, RESEARCH_MODEL)
+        except anthropic.BadRequestError:
+            if RESEARCH_MODEL == DRAFTING_MODEL:
+                raise
+            return _research_call(company_name, context, industry, heading, seeds, DRAFTING_MODEL)
+
+    sections: dict[str, tuple[str, list]] = {}
+    jobs = []
+    for topic, calls in RESEARCH_TOPICS:
+        cached = repo.get_research_cache(company_key, topic, RESEARCH_CACHE_DAYS)
+        if cached:
+            sections[topic] = (cached["memo"], cached["sources"])
+        else:
+            jobs += [(topic, n, heading, which) for n, (heading, which) in enumerate(calls)]
+    results: dict[tuple, tuple] = {}
+    if jobs:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(jobs)) as pool:
+            # copy_context so each thread's API usage is recorded against this task
+            futures = {(t, n): pool.submit(contextvars.copy_context().run, run, h, w) for t, n, h, w in jobs}
+            for key, fut in futures.items():
+                try:
+                    results[key] = fut.result()
+                except Exception as exc:
+                    log_text = f"(research for this part failed: {type(exc).__name__})"
+                    results[key] = (log_text, [])
+    for topic, calls in RESEARCH_TOPICS:
+        if topic in sections:
+            continue
+        parts = [results[(topic, n)] for n in range(len(calls)) if (topic, n) in results]
+        memo = "\n\n".join(text for text, _ in parts if text)
+        srcs = [s for _, ss in parts for s in ss]
+        sections[topic] = (memo, srcs)
+        if memo and "research for this part failed" not in memo:
+            repo.put_research_cache(company_key, topic, memo, srcs)
+    memo = "\n\n".join(sections[t][0] for t, _ in RESEARCH_TOPICS if sections[t][0])
+    if not memo.strip():
         raise RuntimeError("web research returned no memo text")
-    return {"memo": text, "sources": sources}
+    seen, sources = set(), []
+    for t, _ in RESEARCH_TOPICS:
+        for s in sections[t][1]:
+            if s["url"] not in seen:
+                seen.add(s["url"])
+                sources.append(s)
+    return {"memo": memo, "sources": sources, "industry": industry,
+            "from_cache": sorted(t for t, _ in RESEARCH_TOPICS if not any(j[0] == t for j in jobs))}
 
 
 # --------------------------------------------------------------- drafting --
@@ -401,6 +525,10 @@ Company states...", "The Team considers...". Assessments are the Team's.
 - When the evidence lacks something this section would normally cover, say \
 so in one plain sentence ("The data room contains no executed supply \
 agreement.") and make it a follow-up item. Never pad a gap with generic text.
+- Before writing that a document is missing, unsigned or unconfirmed, check \
+the evidence pack: every document listed there IS in the data room, with \
+its signature status. Never mention search tools, search limits or caps; \
+where public information is thin, name the specific follow-up instead.
 - Unsigned, draft, or non-binding documents are identified as such.
 - Depth: match the reference report -- each part states its target length; \
 reach it with substance, not padding. Tables are used for anything with several attributes per \
@@ -435,30 +563,54 @@ def drafting_system_blocks(context: str) -> list[dict]:
     ]
 
 
-def _drafting_params(context: str) -> dict:
+def _drafting_params(context: str, thinking: str | None = None) -> dict:
     # Identical for every drafting call and the warm-up, so they all share
     # one cache entry: same model, same system blocks, no tools, the same
-    # schema (section keys are checked in code, not pinned in the schema).
-    return dict(
+    # schema (section keys are checked in code, not pinned in the schema),
+    # the same thinking setting.
+    params = dict(
         model=DRAFTING_MODEL,
         system=drafting_system_blocks(context),
         output_config=_output_config(DraftingOutput, DRAFTING_EFFORT, DRAFTING_MODEL),
     )
+    if (thinking or DRAFTING_THINKING) == "disabled" and model_config.supports_disabled_thinking(DRAFTING_MODEL):
+        params["thinking"] = {"type": "disabled"}
+    return params
 
 
-def build_drafting_request(spec, company_name: str, context: str, user_content: str) -> dict:
+def drafting_max_tokens(target_words: int, thinking: str | None = None) -> int:
+    """Output ceiling for one drafting call: the parts' reference length in
+    words, as JSON blocks (~2 tokens a word), plus room for reasoning when
+    it is on. A ceiling, not a target -- generous enough never to cut a
+    complete answer off."""
+    room = 0 if (thinking or DRAFTING_THINKING) == "disabled" else 20_000
+    return int(min(max(target_words * 3 + 6_000 + room, 12_000), 48_000))
+
+
+def build_drafting_request(spec, company_name: str, context: str, user_content: str,
+                           target_words: int = 4_000, thinking: str | None = None) -> dict:
     """kwargs for client.messages.create(**kwargs) or a Batch request."""
     return dict(
-        max_tokens=48000,
+        max_tokens=drafting_max_tokens(target_words, thinking),
         messages=[{"role": "user", "content": user_content}],
-        **_drafting_params(context),
+        **_drafting_params(context, thinking),
     )
 
 
-def draft_section(spec, company_name: str, context: str, user_content: str) -> DraftingOutput:
-    params = build_drafting_request(spec, company_name, context, user_content)
-    response = _create(_client(), f"draft:{spec.task_key}", **params)
+def draft_section(spec, company_name: str, context: str, user_content: str, target_words: int = 4_000,
+                  thinking: str | None = None, purpose: str | None = None):
+    params = build_drafting_request(spec, company_name, context, user_content, target_words, thinking)
+    response = _create(_client(), purpose or f"draft:{spec.task_key}", **params)
     return parse_structured_response(response, DraftingOutput)
+
+
+def draft_section_raw(spec, company_name: str, context: str, user_content: str, target_words: int,
+                      thinking: str, purpose: str):
+    """For the A/B comparison: the parsed output plus the raw response
+    (usage, content block types)."""
+    params = build_drafting_request(spec, company_name, context, user_content, target_words, thinking)
+    response = _create(_client(), purpose, **params)
+    return parse_structured_response(response, DraftingOutput), response
 
 
 def warm_drafting_cache(context: str) -> None:
@@ -574,6 +726,7 @@ def grade_golden_facts(items: list[tuple[str, str, list[str]]], texts: dict[str,
     response = _create(
         _client(), "eval:golden",
         model=READ_MODEL,
+        **model_config.no_thinking(READ_MODEL),
         max_tokens=8000,
         system=("You check whether a due diligence report states specific facts. A fact is present only if the "
                 "report states its substance correctly (figures, names and dates must match; wording may differ). "

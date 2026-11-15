@@ -463,15 +463,40 @@ def set_job_research(job_id, research: dict) -> None:
         conn.execute("UPDATE jobs SET research=%s, updated_at=now() WHERE id=%s", (Json(research), job_id))
 
 
+PRICE_VERSION = 2  # prices from app/model_config.py
+
+
 def record_api_usage(job_id, task_id, purpose: str, model: str, input_tokens: int, output_tokens: int,
-                     cache_write_tokens: int, cache_read_tokens: int, web_searches: int, cost_usd: float) -> None:
+                     cache_write_tokens: int, cache_read_tokens: int, web_searches: int, cost_usd: float,
+                     batch: bool = False) -> None:
     with pool.connection() as conn:
         conn.execute(
             "INSERT INTO api_usage (job_id, task_id, purpose, model, input_tokens, output_tokens, "
-            "cache_write_tokens, cache_read_tokens, web_searches, cost_usd) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            "cache_write_tokens, cache_read_tokens, web_searches, cost_usd, price_version, batch) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (job_id, task_id, purpose, model, input_tokens, output_tokens, cache_write_tokens,
-             cache_read_tokens, web_searches, cost_usd),
+             cache_read_tokens, web_searches, cost_usd, PRICE_VERSION, batch),
+        )
+
+
+def get_research_cache(company_key: str, topic: str, max_age_days: int) -> Optional[dict]:
+    with pool.connection() as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                "SELECT * FROM research_cache WHERE company_key=%s AND topic=%s "
+                "AND created_at > now() - make_interval(days => %s)",
+                (company_key, topic, max_age_days),
+            )
+            return cur.fetchone()
+
+
+def put_research_cache(company_key: str, topic: str, memo: str, sources: list) -> None:
+    with pool.connection() as conn:
+        conn.execute(
+            "INSERT INTO research_cache (company_key, topic, memo, sources) VALUES (%s, %s, %s, %s) "
+            "ON CONFLICT (company_key, topic) DO UPDATE SET memo=EXCLUDED.memo, sources=EXCLUDED.sources, "
+            "created_at=now()",
+            (company_key, topic, memo, Json(sources)),
         )
 
 
@@ -483,8 +508,8 @@ def job_usage_summary(job_id) -> list[dict]:
                 "SELECT purpose, model, count(*) AS calls, sum(input_tokens) AS input_tokens, "
                 "sum(output_tokens) AS output_tokens, sum(cache_write_tokens) AS cache_write_tokens, "
                 "sum(cache_read_tokens) AS cache_read_tokens, sum(web_searches) AS web_searches, "
-                "sum(cost_usd) AS cost_usd FROM api_usage WHERE job_id=%s "
-                "GROUP BY purpose, model ORDER BY sum(cost_usd) DESC",
+                "sum(CASE WHEN price_version = 1 AND model LIKE 'claude-sonnet-5%%' AND model NOT LIKE 'claude-sonnet-5-5%%' THEN (cost_usd - web_searches * 0.01) * 2 / 3 + web_searches * 0.01 ELSE cost_usd END) AS cost_usd FROM api_usage WHERE job_id=%s "
+                "GROUP BY purpose, model ORDER BY 9 DESC",
                 (job_id,),
             )
             return cur.fetchall()
@@ -500,7 +525,7 @@ def list_api_usage(job_id) -> list[dict]:
 def job_total_cost(job_id) -> float:
     with pool.connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT coalesce(sum(cost_usd), 0) FROM api_usage WHERE job_id=%s", (job_id,))
+            cur.execute("SELECT coalesce(sum(CASE WHEN price_version = 1 AND model LIKE 'claude-sonnet-5%%' AND model NOT LIKE 'claude-sonnet-5-5%%' THEN (cost_usd - web_searches * 0.01) * 2 / 3 + web_searches * 0.01 ELSE cost_usd END), 0) FROM api_usage WHERE job_id=%s", (job_id,))
             return float(cur.fetchone()[0])
 
 

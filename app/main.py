@@ -510,6 +510,18 @@ class UsageOut(BaseModel):
     rows: list[UsageRow]
 
 
+def _corrected_cost(c: dict) -> float:
+    """A usage row's cost at current prices. Rows recorded before prices
+    moved to app/model_config.py (price_version 1) charged Sonnet 5 at
+    $3/$15; its price is $2/$10, exactly 2/3 of every token cost (web
+    search fees unchanged)."""
+    cost = float(c["cost_usd"])
+    if (c.get("price_version") or 1) == 1 and c["model"].startswith("claude-sonnet-5")             and not c["model"].startswith("claude-sonnet-5-5"):
+        search = (c.get("web_searches") or 0) * 0.01
+        cost = (cost - search) * 2 / 3 + search
+    return round(cost, 5)
+
+
 def _usage_stage(purpose: str) -> str:
     if purpose.startswith("eval:"):
         return "evaluation (not report cost)"
@@ -535,7 +547,7 @@ def cost_report(job_id: str):
     purposes: dict[str, dict] = {}
     keys = ("input_tokens", "output_tokens", "cache_write_tokens", "cache_read_tokens", "web_searches")
     for c in calls:
-        cost = float(c["cost_usd"])
+        cost = _corrected_cost(c)
         for bucket, name in ((stages, _usage_stage(c["purpose"])), (purposes, c["purpose"])):
             b = bucket.setdefault(name, {"calls": 0, "cost_usd": 0.0, **{k: 0 for k in keys}})
             b["calls"] += 1
@@ -552,8 +564,37 @@ def cost_report(job_id: str):
         "by_stage": dict(sorted(stages.items())),
         "by_purpose": dict(sorted(purposes.items(), key=lambda kv: -kv[1]["cost_usd"])),
         "calls": [{"purpose": c["purpose"], "model": c["model"], **{k: c[k] for k in keys},
-                   "cost_usd": float(c["cost_usd"]), "at": c["created_at"].isoformat()} for c in calls],
+                   "cost_usd": _corrected_cost(c), "batch": c.get("batch", False),
+                   "at": c["created_at"].isoformat()} for c in calls],
     }
+
+
+@app.post("/jobs/{job_id}/ab-draft")
+def ab_draft(job_id: str, task_key: str, thinking: str = "adaptive"):
+    """Draft one report part (without saving it) with reasoning on
+    ("adaptive", Sonnet 5's default) or off ("disabled"), to compare quality
+    and cost. Returns the text, token usage and cost; recorded as evaluation
+    spend, not report cost."""
+    job = _require_job(job_id)
+    from app import claude_client, usage
+    from app.sections_spec import SPEC_BY_TASK_KEY
+
+    spec = SPEC_BY_TASK_KEY.get(task_key)
+    if spec is None:
+        raise HTTPException(status_code=404, detail=f"unknown task {task_key!r}")
+    if thinking not in ("adaptive", "disabled"):
+        raise HTTPException(status_code=400, detail="thinking must be adaptive or disabled")
+    inputs = pipeline.build_drafting_inputs(job_id, job["company_name"], spec)
+    with usage.task_context(job_id, None):
+        output, response = claude_client.draft_section_raw(
+            spec, job["company_name"], inputs["context"], inputs["user_content"], inputs["target_words"],
+            thinking, f"eval:ab:{task_key}:{thinking}")
+    stats = usage.cost_of(claude_client.DRAFTING_MODEL, response.usage)
+    text = "\n\n".join(f"## {s.section_key}\n" + pipeline.render_blocks_as_text([b.model_dump() for b in s.blocks])
+                       for s in output.sections)
+    return {"task_key": task_key, "thinking": thinking, "stop_reason": response.stop_reason,
+            "content_block_types": [b.type for b in response.content], "usage": stats,
+            "visible_chars": len(text), "text": text}
 
 
 @app.post("/jobs/{job_id}/golden-eval")
