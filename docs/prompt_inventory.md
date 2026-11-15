@@ -266,3 +266,18 @@ implementation time rather than assuming.
   `docs/template_structure.md`, no optional superset, for v1.
 - **U1**: row 190's "TEN AI Prompts" cross-reference is resolved — see §9
   for the recovered master validation prompt text.
+
+## 10. Checks added 2026-11-15 (from the CARI Health reference comparison)
+
+These live in code, not in the Excel library (which is not read at runtime):
+drafting guidance in `app/sections_spec.py`, the QA Key Information Check in
+`app/qa_spec.py`.
+
+| Check | Where |
+|---|---|
+| Conflicts of interest across investigators/pilot sites, advisors (current and former), noteholders, directors and observers | HR intro (H3 "Conflicts of Interest"); Corporate/Legal findings; Regulatory "Clinical Studies and IRB" |
+| Whether converting the notes triggers the charter's anti-dilution adjustment, with a waiver recommendation | Corporate/Legal "Deal Documents" and findings |
+| Compensation table built from offer letters vs. option grants actually made, mismatches flagged | HR "Compensation and Agreements" |
+| Founder and CEO invention-assignment (CIIAA) agreements, not only employees' | HR "Invention Assignment" |
+| Full scenario table: revenue, EBITDA and additional capital for every scenario tab | Financial "Pro Forma Key Metrics" (H3 "Scenarios") |
+| All of the above, plus false "missing document" statements | QA Key Information Check |

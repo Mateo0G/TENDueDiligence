@@ -87,8 +87,14 @@ DD_ASSESSMENT_SPECS: list[QASpec] = [
         has_score=False,  # Flag A1: this one prompt has no numeric score in the source
         instruction=(
             "Review the due diligence report for key information and scan the dataroom to "
-            "check for missing data. List the missing information. Do not assign a numeric "
-            "score for this check."
+            "check for missing data. List the missing information. In particular confirm the report "
+            "covers: conflicts of interest across investigators, advisors, noteholders and board "
+            "members; whether converting the notes triggers anti-dilution and needs a waiver; a "
+            "compensation table from the offer letters with mismatches against option grants; "
+            "founder and CEO invention-assignment (CIIAA) agreements; and a scenario table with "
+            "revenue, EBITDA and additional capital for every scenario in the model. Also list any "
+            "statement that a document is missing or unconfirmed when the dataroom evidence shows "
+            "it is present. Do not assign a numeric score for this check."
         ),
     ),
     QASpec(

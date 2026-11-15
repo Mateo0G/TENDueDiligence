@@ -133,7 +133,10 @@ REPORTS: tuple[Report, ...] = (
             "A table with one row per metric (revenue, gross profit/margin, opex, EBITDA, net income, "
             "headcount, cash, capital required) and one column per projection year, taken exactly from "
             "the model; then H3 'Derived metrics' (growth, margin trajectory, breakeven year, revenue per "
-            "employee, capital efficiency) and the downside/scenario cases."),
+            "employee, capital efficiency) and H3 'Scenarios': a table with one row per scenario or sensitivity "
+            "case in the model -- EVERY scenario tab, including the worst case -- giving the case's "
+            "definition, revenue in the final projection year, EBITDA, and additional capital required; "
+            "never write that a scenario's revenue is 'not disclosed' if any sheet gives it."),
         Sub("investment", "Proposed Investment", "Proposed Investment",
             "The current round precisely: instrument, total size, amount funded / committed / soft-"
             "circled / remaining, cap, discount, interest, maturity, warrants, side letters and "
@@ -185,11 +188,18 @@ REPORTS: tuple[Report, ...] = (
         _intro("After the callout, cover the roster with level-3 headings: 'Board of Directors and Board "
                "Observers', 'Management and Employees', 'Consultants, Technical and Clinical Advisors', "
                "'Advisory Board', 'Former Members' (if any), 'Organization Chart', 'Compensation and "
-               "Agreements' (a table of each person's salary/fees, equity and option grants with vesting, "
-               "and whether a signed employment/consulting/CIIAA agreement is in the dataroom), and "
-               "'Planned Hires in the Financial Model' (table: role | timing | cost | note). Flag any "
-               "conflict of interest (e.g. an investigator or advisor with equity in the company, "
-               "related-party arrangements), and state what background checks were or were not done."),
+               "Agreements' (a table built from the offer letters, employment and consulting agreements and "
+               "the option grant records: person | title | salary or fees | equity/options per offer letter | "
+               "options actually granted (board consent / cap table) | vesting | signed agreement in data room? | "
+               "signed invention-assignment (CIIAA)? -- flag every mismatch between an offer letter and the "
+               "grant actually made, e.g. 152,000 promised vs 157,000 granted), 'Invention Assignment' "
+               "(whether the FOUNDERS and the CEO, not only employees and consultants, have signed "
+               "invention-assignment/CIIAA agreements, with dates), and "
+               "'Planned Hires in the Financial Model' (table: role | timing | cost | note). Add an H3 "
+               "'Conflicts of Interest' that cross-checks people across documents: clinical investigators "
+               "and pilot sites, advisors (current and former), noteholders, directors and observers -- e.g. "
+               "a study investigator who is or was an advisory board member, or an advisor who holds notes -- "
+               "and how each is disclosed or managed. State what background checks were or were not done."),
         Sub("mgmt_bios", "Management Team Biographies", "Management Team Biographies",
             "One H3 per member of management (name, title), each a substantive biography from the "
             "resumes/bios: prior roles with dates, relevant exits/achievements, education."),
@@ -209,9 +219,15 @@ REPORTS: tuple[Report, ...] = (
             "(classes, preferences, protective provisions, conversion), and whether executed."),
         Sub("deal", "Deal Documents", "Deal Documents",
             "Review of the current round's documents (note/SAFE/purchase agreement, warrants, side "
-            "letters, subscription docs) and their key terms; inconsistencies between documents."),
+            "letters, subscription docs) and their key terms; inconsistencies between documents. Test "
+            "whether converting the current notes (at their cap or discount price) would trigger the "
+            "charter's anti-dilution adjustment for existing preferred stock; if it would, quantify the "
+            "effect where possible and recommend obtaining a waiver from the required holders before "
+            "closing."),
         Sub("findings", "Legal Findings and Recommended Actions", "Legal Findings and Recommended Actions",
-            "Table: finding | significance | recommended action."),
+            "Table: finding | significance | recommended action. Include conflicts of interest and "
+            "related-party positions found anywhere in the documents (investigators, advisors, noteholders, "
+            "board members and observers holding notes, equity or fees) and any anti-dilution waiver needed."),
         Sub("checklist", "Documentation Checklist", "Documentation Checklist",
             "Table of expected corporate/deal documents: document | in dataroom? | executed? | note."),
         Sub("followup", "Recommended Legal Follow-Up Before Closing", "Recommended Legal Follow-Up Before Closing",
@@ -361,7 +377,9 @@ REPORTS: tuple[Report, ...] = (
         Sub("qms", "Quality Management System", "Quality Management System",
             "QMS status (ISO 13485/21 CFR 820 or equivalent), SOPs, design controls, gaps."),
         Sub("clinical", "Clinical Studies and IRB", "Clinical Studies and IRB",
-            "Each planned/ongoing study: design, n, sites, IRB approval and date, endpoints, timing."),
+            "Each planned/ongoing study: design, n, sites, IRB approval and date, endpoints, timing, and the "
+            "investigators -- noting any investigator or site with a past or present relationship with the "
+            "Company (advisor, shareholder, noteholder), and how the conflict is managed."),
         Sub("timeline", "Project Timeline", "Project Timeline",
             "Table of the project plan from now to clearance/launch: milestone | target date | status | "
             "dependency, from the company's own plan, with the Team's view of slippage risk."),
