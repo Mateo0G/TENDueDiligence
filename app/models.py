@@ -170,6 +170,40 @@ class ReadOutput(BaseModel):
     documents: list[CompactDigest]
 
 
+class FactCard(BaseModel):
+    """One document's (or one chunk's) fact card from the reading model.
+    doc_id and file_name are filled in by the app, not the model. Every list
+    item is a self-contained statement ending with its page reference in
+    parentheses, e.g. "Conversion price $1.513 per share (p. 3)"."""
+    doc: int = Field(description="The document/chunk number as given in the prompt")
+    doc_type: str = Field(description='e.g. "convertible promissory note", "offer letter", "5-year financial model"')
+    title: str
+    date: str = Field(description='Date the document bears or was last updated, as written; "" if none')
+    parties: list[str]
+    executed: Literal["true", "false", "unclear", "not_applicable"] = Field(
+        description="Agreements/instruments: signed by the parties? Other documents: not_applicable"
+    )
+    signatories: list[str] = Field(description="Who signed, with title, as shown on the signature pages")
+    summary: str = Field(description="1-3 dense sentences: what the document is and what it establishes")
+    key_terms: list[str] = Field(description="Economic and legal terms: prices, rates, caps, discounts, vesting, "
+                                             "rights, obligations, exclusivity, termination, IP ownership")
+    key_numbers: list[str] = Field(description="Figures with what they measure: amounts, shares, %, revenue/EBITDA "
+                                               "by year and scenario, cash, headcount, test results")
+    dates_and_deadlines: list[str]
+    ip_items: list[str] = Field(description="Patents/applications (numbers, filing dates), assignments and their "
+                                            "recordation, licenses, invention-assignment terms")
+    people_mentioned: list[str] = Field(description="Name -- role/relationship (e.g. investigator, advisor, director)")
+    page_refs: list[str] = Field(description='Pointers to the most important pages, e.g. "p. 4: capitalization table"')
+    report_tags: list[EvidenceTag] = Field(description="Every report this document is evidence for -- usually 1-4")
+    importance: int = Field(description="1-5: how central this document is to an investor's diligence")
+    issues: list[str] = Field(description="Unsigned, blank fields, inconsistencies, expired dates, unusual terms, "
+                                          "conflicts of interest")
+
+
+class FactCardOutput(BaseModel):
+    cards: list[FactCard]
+
+
 # ------------------------------------------------------------- key facts --
 
 class KeyFact(BaseModel):

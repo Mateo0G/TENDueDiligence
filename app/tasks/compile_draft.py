@@ -33,7 +33,8 @@ def run_compile_draft(task: dict) -> dict:
         except Exception:
             logo_bytes = None
 
-    docx_bytes = build_report_docx(company_name, sections, logo_bytes=logo_bytes)
+    docx_bytes = build_report_docx(company_name, sections, logo_bytes=logo_bytes,
+                                   coverage=repo.coverage_summary(job_id))
     object_key = f"reports/{job_id}/draft.docx"
     storage.put_bytes(
         object_key,

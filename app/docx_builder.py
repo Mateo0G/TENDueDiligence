@@ -520,6 +520,33 @@ def _build_cover_and_front_matter(doc, company_name: str, logo_bytes: bytes | No
     # No trailing page break: every Heading 1 starts its own page.
 
 
+def _add_coverage(doc, coverage: dict | None):
+    """Front-matter statement of what was read, and a table of any file
+    that could not be read in full -- so a coverage gap is visible on page
+    one instead of surfacing as a wrong "missing document" finding."""
+    if not coverage or not coverage.get("pages_total"):
+        return
+    brk = doc.add_paragraph()
+    brk.add_run().add_break(WD_BREAK.PAGE)
+    label = doc.add_paragraph()
+    _style_run(label.add_run("Data Room Coverage"), 12, bold=True, color=NAVY)
+    by = coverage.get("pages_by_method") or {}
+    text_pages = by.get("text", 0) + by.get("native", 0)
+    p = doc.add_paragraph()
+    summary = (f"The Due Diligence Team's review covered {coverage['files']} files and "
+               f"{coverage['pages_extracted']:,} of {coverage['pages_total']:,} pages: {text_pages:,} from the "
+               f"documents' text, {by.get('ocr', 0):,} by OCR of scanned pages and {by.get('vision', 0):,} read "
+               f"visually; {by.get('blank', 0):,} pages were blank.")
+    if not coverage.get("short"):
+        summary += " Every document was read in full."
+    _add_rich_text(p, summary, size_pt=9.5)
+    if coverage.get("short"):
+        _add_table_block(doc, ["Document", "Pages read", "Problem"],
+                         [[s["file"], f"{s['pages_extracted']} of {s['pages_total']}", s["problem"]]
+                          for s in coverage["short"]],
+                         "Documents that could not be read in full (review manually)")
+
+
 def _add_report_sections(doc, report_sections: list[dict]):
     for section in report_sections:
         level = section.get("heading_level") or 1
@@ -612,12 +639,14 @@ def _to_bytes(doc) -> bytes:
     return buffer.getvalue()
 
 
-def build_report_docx(company_name: str, report_sections: list[dict], logo_bytes: bytes | None = None) -> bytes:
+def build_report_docx(company_name: str, report_sections: list[dict], logo_bytes: bytes | None = None,
+                      coverage: dict | None = None) -> bytes:
     """The Stage 3/4 review-checkpoint draft: cover, contents, disclaimer,
     and every drafted report. report_sections: rows from
     repo.list_report_sections, already ordered by order_index."""
     doc = _new_document()
     _build_cover_and_front_matter(doc, company_name, logo_bytes)
+    _add_coverage(doc, coverage)
     _add_report_sections(doc, report_sections)
     return _to_bytes(doc)
 
@@ -629,11 +658,13 @@ def build_final_report_docx(
     gap_analysis: dict | None,
     mitigation_strategy: dict | None,
     logo_bytes: bytes | None = None,
+    coverage: dict | None = None,
 ) -> bytes:
     """The Stage 6 final render: the same reports plus the QA Report Card
     and Gap Analysis/Mitigation appendices."""
     doc = _new_document()
     _build_cover_and_front_matter(doc, company_name, logo_bytes)
+    _add_coverage(doc, coverage)
     _add_report_sections(doc, report_sections)
     _add_qa_report_card(doc, qa_scores)
     _add_gap_analysis_and_mitigation(doc, gap_analysis, mitigation_strategy)

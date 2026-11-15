@@ -102,12 +102,21 @@ def render_digest(f: dict, compact: bool = False) -> str:
         first = re.split(r"(?<=[.;])\s", summary, maxsplit=1)[0][:240]
         return f"{head} | {first}"
     lines = [head + f" | importance {_importance(f)} | tags: {', '.join(d.get('tags') or []) or '-'}"]
-    if d.get("read_chars") and d.get("text_chars") and d["read_chars"] < d["text_chars"]:
+    if d.get("pages_total"):
+        if d.get("read_mode") == "sample":
+            lines[0] += f" | routine document: key pages of {d['pages_total']} summarized"
+        elif d.get("pages_extracted", d["pages_total"]) < d["pages_total"]:
+            lines[0] += f" | only {d['pages_extracted']} of {d['pages_total']} pages could be read"
+        else:
+            lines[0] += f" | all {d['pages_total']} pages read"
+    elif d.get("read_chars") and d.get("text_chars") and d["read_chars"] < d["text_chars"]:
         lines[0] += f" | read {d['read_chars']:,} of {d['text_chars']:,} chars"
-    if d.get("read_visually") and d.get("pages_total") and (d.get("pages_read") or 0) < d["pages_total"]:
-        lines[0] += f" | scanned, read {d['pages_read']} of {d['pages_total']} pages"
     if d.get("parties"):
         lines.append("Parties: " + "; ".join(d["parties"][:12]))
+    if d.get("signatories"):
+        lines.append("Signed by: " + "; ".join(d["signatories"][:12]))
+    if d.get("people_mentioned"):
+        lines.append("People: " + "; ".join(d["people_mentioned"][:15]))
     if summary:
         lines.append(summary)
     for k in d.get("key_facts") or []:
@@ -161,14 +170,34 @@ def _pack_body(files: list[dict], budget: int) -> str:
     return "\n\n".join(parts).strip()
 
 
+def coverage_statement(job_id) -> str:
+    """What was read, for the drafting model: so it neither hedges about
+    pages it actually has nor claims to have read what it couldn't."""
+    try:
+        c = repo.coverage_summary(job_id)
+    except Exception:
+        return ""
+    if not c["pages_total"]:
+        return ""
+    by = c["pages_by_method"]
+    line = (f"Coverage: {c['pages_extracted']:,} of {c['pages_total']:,} pages extracted "
+            f"({by.get('ocr', 0)} by OCR of scanned pages, {by.get('vision', 0)} read visually). ")
+    if c["short"]:
+        line += ("Not fully readable: " + "; ".join(f"{s['file']} ({s['pages_extracted']}/{s['pages_total']} pages)"
+                                                     for s in c["short"][:12]) + ". ")
+    line += ("A document listed in this pack IS in the data room: never describe it as missing, unconfirmed or "
+             "not provided. Before saying any document is absent, check this list.")
+    return line
+
+
 def build_pack(job_id, budget: int = PACK_CHARS, include_deck: bool = True) -> str:
     files, n_dupes = unique_files(job_id)
     room = [f for f in files if f["file_kind"] == "dataroom"]
     decks = [f for f in files if f["file_kind"] == "pitch_deck"]
     head = (f"{len(files)} unique documents"
             + (f" ({n_dupes} duplicate copies omitted)" if n_dupes else "")
-            + ". Each entry: [dataroom path] type | date | signature status | importance 1-5 | tags, then what the "
-              "document establishes. Cite documents by name.")
+            + ". Each entry: [dataroom path] type | date | signature status | importance 1-5 | tags | pages read, "
+              "then what the document establishes. Cite documents by name.\n" + coverage_statement(job_id))
     parts = [head, _pack_body(room + decks, budget)]
     if include_deck and decks:
         deck_text = file_text(decks[0])

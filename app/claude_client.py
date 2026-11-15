@@ -21,14 +21,13 @@ import anthropic
 
 from app import usage
 from app.models import (
-    CompactDigest,
     DraftingOutput,
+    FactCardOutput,
     GapAnalysisOutput,
     KeyFactsOutput,
     MitigationOutput,
     QAAllOutput,
     QAScoreOutput,
-    ReadOutput,
 )
 from app.qa_spec import QASpec
 
@@ -108,104 +107,121 @@ def parse_structured_response(response, model_cls):
 # ---------------------------------------------------------------- reading --
 
 READ_SYSTEM_PROMPT = """\
-You read documents from a startup's due diligence dataroom for an \
-investor-side diligence team and record what each one establishes, so the \
-report writers can work from your notes instead of the documents.
+You read documents from a startup's due diligence data room for an \
+investor-side diligence team and write one fact card per document (or per \
+numbered chunk of a long document), so the report writers can work from \
+your cards instead of the documents.
 
 Rules:
 - Quote figures, dates, names, titles, share counts, prices and terms exactly \
-as written. Never infer or estimate anything the document does not say.
-- A document may be an excerpt (opening and ending, with the omitted middle \
-marked). Record only what you can see.
-- Say whether agreements and instruments are executed (signed by the parties) \
-or unsigned/draft.
-- Describe products and technology exactly as the document does (e.g. do not \
-call a whole-blood test a fingerstick test unless the document does).
+as written. Never infer or estimate anything the text does not say.
+- End every list item with its page reference in parentheses, e.g. \
+"Conversion price $1.513 per share (p. 3)". Pages are marked [page N].
+- A page marked as identical to another document's page was read there; do \
+not guess its content.
+- executed: "true" only if the signature pages show signatures, e-signature \
+marks (DocuSign/Carta envelope IDs, "/s/") or the text says it was signed; \
+"false" for drafts, forms and unsigned copies; "unclear" otherwise.
+- Describe products and technology exactly as the document does (do not call \
+a whole-blood test a fingerstick test unless the document does).
+- Record people and their roles in people_mentioned -- investigators, \
+advisors, directors, noteholders, consultants -- so conflicts of interest \
+can be found across documents.
 
-Importance (1-5) and how much to record:
-5 = core: financing documents (term sheet, notes, SAFEs, warrants, \
-subscription/purchase agreements), cap table / securities ledger, financial \
-statements, financial model/budget, charter, key licenses and IP \
-assignments, regulatory submissions and agency correspondence, pitch deck / \
-executive summary. Up to 18 key facts.
-4 = material: executed material contracts, offer letters / employment and \
-consulting agreements with compensation or equity, board and stockholder \
-consents (financings, option grants, valuations), patents and applications, \
-clinical / validation / test reports, customer letters of support / LOIs, \
-market and reimbursement studies, development and project plans. Up to 10.
-3 = supporting: minutes, SOPs, investor updates, leases, insurance, \
-supplier quotes. Up to 5.
+Importance (1-5) and depth:
+5 = core: financing documents (term sheets, notes, SAFEs, warrants, \
+subscription/purchase agreements, investors' rights / side letters), cap \
+table / securities ledger, charter and bylaws, financial statements, \
+financial model, key licenses, patent filings and assignments, regulatory \
+submissions and agency correspondence, pitch deck / executive summary. \
+Up to 25 items per list.
+4 = material: executed material contracts, offer letters / employment / \
+consulting / invention-assignment agreements, board and stockholder \
+consents, valuations (409A), clinical / validation / test reports, customer \
+letters / LOIs, market and reimbursement studies, project plans. Up to 12.
+3 = supporting: minutes, SOPs, investor updates, leases, insurance. Up to 6.
 2 = routine: NDAs, forms, certificates, bank statements (record the balance \
-and date), invoices. 0-2.
-1 = no substance (blank templates, logos). 0.
+and date), invoices. Up to 2.
+1 = no substance. Empty lists.
 
-What to capture by document type:
-- Spreadsheets (models, budgets, ledgers, cap tables): the key line items by \
-year or holder as facts, e.g. "Revenue: 2026 $0.4M; 2027 $3.1M; 2028 $9.8M"; \
-totals (fully diluted shares, option pool, cash, burn, headcount).
+By document type:
+- Spreadsheets: for EVERY sheet, the key line items by year (revenue, \
+EBITDA, net income, cash, capital needed, headcount) and, for scenario or \
+sensitivity tabs, each scenario's name with its revenue, EBITDA and capital \
+need -- e.g. "Scenario 'Downside 10% + 12-mo delay': 2032 revenue $14.5M; \
+capital need up to $11.9M (Sheet: Scenarios)". Cap tables: holders, shares, \
+% outstanding and fully diluted, option pool.
 - Financing documents: amount, price/cap/discount, interest, maturity, \
-conversion terms, investors and amounts, warrants, closing status.
-- Agreements: parties, date, term, economics (fees, royalties, milestones, \
-equity), exclusivity, IP ownership, termination.
-- Employment, offer, consulting and advisor documents: person, title, \
-salary/fees, bonus, equity (shares, strike, vesting), start date, IP \
-assignment.
+conversion and anti-dilution terms, investors and amounts, warrants.
+- Agreements: parties, date, term, economics, exclusivity, IP ownership, \
+termination.
+- Employment, offer, consulting, advisor documents: person, title, salary or \
+fees, equity (shares, strike, vesting), start date, invention assignment.
+- Patent documents: application numbers, titles, filing dates, priority \
+claims, assignees, assignment recordation (reel/frame, date).
 - Technical, clinical and regulatory documents: what was tested, how, n, \
 results with numbers, dates, agency feedback.
 
-Tags = every report the document is evidence for (usually 1-4): commercial, \
-financial, deal_terms, corporate, contracts, team, ip, science_tech, \
-manufacturing, regulatory, competition, exit. A convertible note is \
-deal_terms + financial + contracts; an offer letter is team + contracts; a \
-financial model is financial + commercial; a supply agreement is contracts + \
-manufacturing; a customer LOI is commercial + contracts.
+report_tags: commercial, financial, deal_terms, corporate, contracts, team, \
+ip, science_tech, manufacturing, regulatory, competition, exit.
 
 Respond with JSON only, matching the schema.
 """
 
 
-def read_documents(company_name: str, docs: list[tuple[int, str, str, str, int]]) -> ReadOutput:
-    """docs: (number, dataroom path, filename, text or excerpt, full length)."""
-    parts = [f"Company under diligence: {company_name}\n\nRead each document below and return one entry "
-             f"per document in `documents` ({len(docs)} in total), with its number in `doc`."]
-    for n, path, filename, text, full_len in docs:
-        note = f" (excerpt of a {full_len:,}-character document)" if len(text) < full_len else ""
-        parts.append(f"=== Document {n} ===\nPath: {path}\nFile: {filename}{note}\n\n{text}")
+def read_fact_cards(company_name: str, entries: list[tuple[int, str, str, str]]) -> FactCardOutput:
+    """entries: (number, dataroom path, heading note, text with [page N] markers).
+    One card per entry."""
+    parts = [f"Company under diligence: {company_name}\n\nWrite one fact card per numbered document below "
+             f"({len(entries)} in total), with its number in `doc`."]
+    for n, path, note, text in entries:
+        parts.append(f"=== Document {n} ===\nPath: {path}{(' -- ' + note) if note else ''}\n\n{text}")
     response = _create(
         _client(), "read",
         model=READ_MODEL,
-        max_tokens=16000,
+        max_tokens=24000,
         system=READ_SYSTEM_PROMPT,
-        output_config=_output_config(ReadOutput, "low", READ_MODEL),
+        output_config=_output_config(FactCardOutput, "low", READ_MODEL),
         messages=[{"role": "user", "content": "\n\n".join(parts)}],
     )
-    return parse_structured_response(response, ReadOutput)
+    return parse_structured_response(response, FactCardOutput)
 
 
-def read_visual_document(company_name: str, path: str, filename: str, visual: dict) -> CompactDigest:
-    from app.extract import api_block
+def _png_block(png: bytes) -> dict:
+    import base64
+    return {"type": "image", "source": {"type": "base64", "media_type": "image/png",
+                                        "data": base64.b64encode(png).decode()}}
 
-    sent, total = visual.get("_pages_sent"), visual.get("_pages_total")
-    pages = (f" Pages attached: the first {sent - 1} and the last of {total}." if sent and total and sent < total else "")
+
+def transcribe_page(png: bytes, path: str, page_no: int) -> str:
+    """One page OCR could not read reliably, transcribed by the vision model."""
     response = _create(
         _client(), "read_visual",
         model=READ_MODEL,
-        max_tokens=8000,
-        system=READ_SYSTEM_PROMPT,
-        output_config=_output_config(ReadOutput, "low", READ_MODEL),
+        max_tokens=4000,
+        system="You transcribe one scanned page from a due diligence data room. Output only the page's text, "
+               "tables as pipe-separated rows. For signatures write [signed: name if legible] or [signature line "
+               "blank]. Do not summarize or add commentary.",
         messages=[{"role": "user", "content": [
-            api_block(visual),
-            {"type": "text", "text": (
-                f"Company under diligence: {company_name}\nPath: {path}\nFile: {filename}\n\n"
-                f"This document has little or no text layer, so it is attached as page images.{pages} "
-                f"Return exactly one entry in `documents`, with doc = 1."
-            )},
-        ]}],
+            _png_block(png), {"type": "text", "text": f"{path}, page {page_no}. Transcribe it."}]}],
     )
-    out = parse_structured_response(response, ReadOutput)
-    if not out.documents:
-        raise RuntimeError("the reading model returned no entry for this document")
-    return out.documents[0]
+    return "".join(b.text for b in response.content if b.type == "text").strip()
+
+
+def check_signature_page(png: bytes, path: str, page_no: int) -> str:
+    """'yes' / 'no' / 'unclear': is this signature page actually signed?"""
+    response = _create(
+        _client(), "read_signature",
+        model=READ_MODEL,
+        max_tokens=20,
+        system="You look at one signature page of an agreement. Answer with exactly one word: yes if it carries "
+               "signatures (handwritten, pasted image, or e-signature marks), no if the signature lines are blank, "
+               "unclear if you cannot tell.",
+        messages=[{"role": "user", "content": [
+            _png_block(png), {"type": "text", "text": f"{path}, page {page_no}. Is it signed?"}]}],
+    )
+    word = "".join(b.text for b in response.content if b.type == "text").strip().lower()
+    return word if word in ("yes", "no", "unclear") else "unclear"
 
 
 # -------------------------------------------------------------- key facts --

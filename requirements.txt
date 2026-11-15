@@ -18,3 +18,10 @@ pypdf>=4.2
 cryptography>=42
 python-pptx>=1.0
 pyyaml>=6.0
+# Per-page PDF extraction (text layer, tables, page rendering for OCR).
+pymupdf>=1.24
+# Local OCR of scanned pages -- needs the tesseract-ocr system package
+# (installed on Railway via railpack.json).
+pytesseract>=0.3.10
+pillow>=10.0
+extract-msg>=0.48

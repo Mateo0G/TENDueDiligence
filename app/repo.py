@@ -591,3 +591,128 @@ def list_dataroom_files(job_id, file_kind: Optional[str] = None) -> list[dict]:
                     (job_id,),
                 )
             return cur.fetchall()
+
+
+# ------------------------------------------------- pages, coverage, cache --
+
+def replace_document_pages(job_id, file_id, pages: list[dict]) -> None:
+    """pages: dicts with no, label, method, text, confidence, is_signature, text_hash."""
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM document_pages WHERE file_id=%s", (file_id,))
+            if pages:
+                cur.executemany(
+                    "INSERT INTO document_pages (job_id, file_id, page_no, label, method, chars, confidence, "
+                    "is_signature, text_hash, text) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    [(job_id, file_id, p["no"], p.get("label") or "", p["method"], len(p.get("text") or ""),
+                      p.get("confidence"), bool(p.get("is_signature")), p.get("text_hash"),
+                      (p.get("text") or "").replace("\x00", "")) for p in pages],
+                )
+
+
+def job_page_hashes(job_id) -> dict[str, tuple[str, int]]:
+    """text hash -> (filename, page_no) of the first page with that text in
+    this job, for reading each repeated boilerplate page only once."""
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT DISTINCT ON (p.text_hash) p.text_hash, f.original_filename, p.page_no "
+                "FROM document_pages p JOIN dataroom_files f ON f.id = p.file_id "
+                "WHERE p.job_id=%s AND p.text_hash IS NOT NULL AND p.chars > 200 "
+                "ORDER BY p.text_hash, p.id",
+                (job_id,),
+            )
+            return {row[0]: (row[1], row[2]) for row in cur.fetchall()}
+
+
+def count_api_calls(job_id, purpose: str) -> int:
+    """How many calls of one purpose this job has made (caps per data room)."""
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM api_usage WHERE job_id=%s AND purpose=%s", (job_id, purpose))
+            return cur.fetchone()[0]
+
+
+def count_pages_by_method(job_id, method: str) -> int:
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM document_pages WHERE job_id=%s AND method=%s", (job_id, method))
+            return cur.fetchone()[0]
+
+
+def list_document_pages(job_id) -> list[dict]:
+    with pool.connection() as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                "SELECT p.file_id, f.original_filename, f.source_path, p.page_no, p.label, p.method, p.text "
+                "FROM document_pages p JOIN dataroom_files f ON f.id = p.file_id "
+                "WHERE p.job_id=%s AND p.chars > 0 ORDER BY f.created_at, p.page_no",
+                (job_id,),
+            )
+            return cur.fetchall()
+
+
+def set_file_extraction(file_id, page_count: int, pages_extracted: int, method: str, executed: str | None) -> None:
+    with pool.connection() as conn:
+        conn.execute(
+            "UPDATE dataroom_files SET page_count=%s, pages_extracted=%s, extraction_method=%s, executed=%s "
+            "WHERE id=%s",
+            (page_count, pages_extracted, method, executed, file_id),
+        )
+
+
+def coverage_summary(job_id) -> dict:
+    """Pages extracted vs. pages present for every file of the job, by method."""
+    with pool.connection() as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                "SELECT id, original_filename, source_path, page_count, pages_extracted, extraction_method, digest "
+                "FROM dataroom_files WHERE job_id=%s ORDER BY created_at",
+                (job_id,),
+            )
+            files = cur.fetchall()
+            cur.execute("SELECT method, count(*) FROM document_pages WHERE job_id=%s GROUP BY method", (job_id,))
+            methods = {r["method"]: r["count"] for r in cur.fetchall()}
+    short, unread = [], 0
+    for f in files:
+        d = f.get("digest") or {}
+        if d.get("duplicate_of"):
+            continue
+        if f["page_count"] is None:
+            unread += 1
+            continue
+        if (f["pages_extracted"] or 0) < f["page_count"] or d.get("fallback"):
+            short.append({"file": f["source_path"] or f["original_filename"], "pages_total": f["page_count"],
+                          "pages_extracted": f["pages_extracted"] or 0,
+                          "problem": d.get("extraction_error") or "pages not readable"})
+    return {
+        "files": len(files),
+        "files_not_yet_read": unread,
+        "pages_total": sum(f["page_count"] or 0 for f in files),
+        "pages_extracted": sum(f["pages_extracted"] or 0 for f in files),
+        "pages_by_method": methods,
+        "short": short,
+        "complete": not short and not unread,
+    }
+
+
+def get_extraction_cache(sha256: str, extract_version: int) -> Optional[dict]:
+    with pool.connection() as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute("SELECT * FROM extraction_cache WHERE sha256=%s AND extract_version=%s",
+                        (sha256, extract_version))
+            return cur.fetchone()
+
+
+def put_extraction_cache(sha256: str, extract_version: int, kind: str, page_count: int, pages: list[dict],
+                         executed: str | None, card: dict | None, card_version: int | None) -> None:
+    with pool.connection() as conn:
+        conn.execute(
+            "INSERT INTO extraction_cache (sha256, extract_version, card_version, kind, page_count, pages, executed, card) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
+            "ON CONFLICT (sha256, extract_version) DO UPDATE SET card_version=EXCLUDED.card_version, "
+            "kind=EXCLUDED.kind, page_count=EXCLUDED.page_count, pages=EXCLUDED.pages, executed=EXCLUDED.executed, "
+            "card=EXCLUDED.card, updated_at=now()",
+            (sha256, extract_version, card_version, kind, page_count, Json(pages), executed,
+             Json(card) if card is not None else None),
+        )

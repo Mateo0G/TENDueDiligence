@@ -26,6 +26,7 @@ def run_final_render(task: dict) -> dict:
         gap_analysis=job["gap_analysis"],
         mitigation_strategy=job["mitigation_strategy"],
         logo_bytes=logo_bytes,
+        coverage=repo.coverage_summary(job_id),
     )
 
     object_key = job["output_key"] or f"reports/{job_id}/draft.docx"

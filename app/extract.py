@@ -3,12 +3,10 @@ a Claude prompt. Anything we can't extract text from comes back as a short
 placeholder rather than raising -- a due diligence dataroom always contains
 some binary noise and a drafting prompt should still run on everything else.
 
-Files with no usable text layer (scanned PDFs, images) are not a dead end:
-`visual_source` returns them in a form Claude can read directly (PDF
-document block / image block), which the per-file digest step uses -- see
-app/tasks/digest_document.py.
+This is the quick whole-file text used for fallbacks (a pitch deck with no
+stored sidecar, files from before page-level ingestion). Data-room ingestion
+itself extracts every page -- with local OCR for scans -- in app/ingest.py.
 """
-import base64
 import hashlib
 import io
 import re
@@ -17,7 +15,7 @@ import openpyxl
 from docx import Document as DocxDocument
 from docx.table import Table as DocxTable
 from docx.text.paragraph import Paragraph as DocxParagraph
-from pypdf import PdfReader, PdfWriter
+from pypdf import PdfReader
 
 # Generous ceiling so one pathological file (a 200-sheet model dump) can't
 # blow a prompt on its own. Real documents almost never reach it -- the old
@@ -30,18 +28,6 @@ IMAGE_MEDIA_TYPES = {
     ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
     ".gif": "image/gif", ".webp": "image/webp",
 }
-# A PDF averaging fewer extractable characters per page than this is treated
-# as scanned (signed agreements, faxed letters): its text layer is empty or
-# just page furniture, so Claude reads the page images instead.
-_SCANNED_CHARS_PER_PAGE = 120
-# Page images are the most expensive input there is (~1.5-3k tokens a
-# page). Scanned dataroom documents are overwhelmingly signed agreements,
-# letters and certificates, whose substance is on the first pages and whose
-# signatures/dates are on the last -- so send the first four and the last.
-_MAX_VISUAL_PDF_PAGES = 5
-_MAX_VISUAL_BYTES = 20 * 1024 * 1024
-_MAX_IMAGE_BYTES = 5 * 1024 * 1024
-
 
 def extract_text(filename: str, data: bytes, max_chars: int = MAX_CHARS_PER_FILE) -> str:
     lower = filename.lower()
@@ -74,65 +60,10 @@ def is_placeholder(text: str) -> bool:
     return text.startswith("[") and text.endswith("]") and "\n" not in text
 
 
-def visual_source(filename: str, data: bytes, extracted_text: str) -> dict | None:
-    """A Claude content block (document or image) for a file whose text
-    layer is missing or too thin to rely on, or None if the extracted text
-    is good enough (or the file can't be sent visually)."""
-    lower = filename.lower()
-    if lower.endswith(tuple(IMAGE_MEDIA_TYPES)):
-        if len(data) > _MAX_IMAGE_BYTES:
-            return None
-        media_type = IMAGE_MEDIA_TYPES[next(ext for ext in IMAGE_MEDIA_TYPES if lower.endswith(ext))]
-        return {"type": "image", "source": {"type": "base64", "media_type": media_type,
-                                            "data": base64.b64encode(data).decode()}}
-    if not lower.endswith(".pdf"):
-        return None
-    try:
-        reader = PdfReader(io.BytesIO(data))
-        n_pages = len(reader.pages)
-    except Exception:
-        return None
-    if n_pages == 0 or len(extracted_text.strip()) / n_pages >= _SCANNED_CHARS_PER_PAGE:
-        return None
-    pdf_bytes = data
-    if n_pages > _MAX_VISUAL_PDF_PAGES or len(data) > _MAX_VISUAL_BYTES:
-        keep = min(_MAX_VISUAL_PDF_PAGES, max(1, int(n_pages * _MAX_VISUAL_BYTES / max(len(data), 1))))
-        indexes = list(range(keep - 1)) + [n_pages - 1] if keep > 1 else [0]
-        writer = PdfWriter()
-        for i in indexes:
-            writer.add_page(reader.pages[i])
-        buffer = io.BytesIO()
-        writer.write(buffer)
-        pdf_bytes = buffer.getvalue()
-        if len(pdf_bytes) > _MAX_VISUAL_BYTES:
-            return None
-    return {"type": "document", "source": {"type": "base64", "media_type": "application/pdf",
-                                           "data": base64.b64encode(pdf_bytes).decode()},
-            "_pages_sent": min(n_pages, _MAX_VISUAL_PDF_PAGES), "_pages_total": n_pages}
-
-
-def api_block(visual: dict) -> dict:
-    """The visual block without this module's bookkeeping keys (the API
-    rejects unknown fields)."""
-    return {k: v for k, v in visual.items() if not k.startswith("_")}
-
-
 def text_hash(text: str) -> str:
     """Identity of a document's *content*: the same agreement exported twice
     (different bytes, same words) hashes the same."""
     return hashlib.sha256(re.sub(r"\W+", "", text.lower()).encode()).hexdigest()
-
-
-def reading_excerpt(text: str, cap: int) -> str:
-    """At most `cap` characters of a document for the reading model: the
-    opening (parties, recitals, economic terms, the summary sheet) and the
-    end (signatures, dates, schedules, totals)."""
-    if len(text) <= cap:
-        return text
-    head = int(cap * 0.82)
-    tail = cap - head
-    return (f"{text[:head]}\n\n[... {len(text) - cap:,} characters omitted from the middle of this document ...]\n\n"
-            f"{text[-tail:]}")
 
 
 def _extract_pdf(data: bytes) -> str:

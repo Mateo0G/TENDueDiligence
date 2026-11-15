@@ -142,6 +142,9 @@ class DataroomFileOut(BaseModel):
     # "read", "read_visually" (scanned, read from page images) or "unreadable".
     digest_status: str | None = None
     tags: list[str] = []
+    page_count: int | None = None        # pages (sheets, slides) in the file
+    pages_extracted: int | None = None   # of those, how many were read (text, OCR or visually)
+    executed: str | None = None          # agreements: yes / no / unclear (signature evidence)
 
 
 class UploadResult(BaseModel):
@@ -163,6 +166,7 @@ class JobOut(BaseModel):
     dataroom_files: list[DataroomFileOut]
     has_logo: bool
     api_cost_usd: float = 0.0  # every Claude call made for this job so far (app/usage.py)
+    coverage: dict = {}        # pages extracted vs. present, by method; files not read in full
 
 
 def _require_job(job_id: str) -> dict:
@@ -183,6 +187,9 @@ def _to_file_out(row: dict) -> DataroomFileOut:
         content_type=row["content_type"],
         digest_status=_digest_status(row.get("digest")),
         tags=(row.get("digest") or {}).get("tags") or [],
+        page_count=row.get("page_count"),
+        pages_extracted=row.get("pages_extracted"),
+        executed=row.get("executed"),
     )
 
 
@@ -193,7 +200,8 @@ def _digest_status(digest: dict | None) -> str | None:
         return "duplicate"
     if digest.get("fallback"):
         return "unreadable"
-    return "read_visually" if digest.get("read_visually") else "read"
+    scanned = digest.get("read_visually") or {"ocr", "vision"} & set(digest.get("page_methods") or [])
+    return "read_visually" if scanned else "read"
 
 
 @app.post("/jobs", response_model=CreateJobResponse)
@@ -270,6 +278,7 @@ def get_job(job_id: str):
         dataroom_files=[_to_file_out(f) for f in files],
         has_logo=bool(job["logo_key"]),
         api_cost_usd=round(repo.job_total_cost(job_id), 2),
+        coverage=repo.coverage_summary(job_id),
     )
 
 
@@ -635,7 +644,7 @@ def get_draft_docx(job_id: str):
     if not sections:
         raise HTTPException(status_code=404, detail="no sections drafted yet")
     logo_bytes = storage.get_bytes(job["logo_key"]) if job["logo_key"] else None
-    docx_bytes = build_report_docx(job["company_name"], sections, logo_bytes)
+    docx_bytes = build_report_docx(job["company_name"], sections, logo_bytes, coverage=repo.coverage_summary(job_id))
     return Response(
         content=docx_bytes,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
