@@ -474,6 +474,13 @@ def job_usage_summary(job_id) -> list[dict]:
             return cur.fetchall()
 
 
+def list_api_usage(job_id) -> list[dict]:
+    with pool.connection() as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute("SELECT * FROM api_usage WHERE job_id=%s ORDER BY created_at, id", (job_id,))
+            return cur.fetchall()
+
+
 def job_total_cost(job_id) -> float:
     with pool.connection() as conn:
         with conn.cursor() as cur:

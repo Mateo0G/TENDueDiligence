@@ -1,0 +1,237 @@
+# Golden facts for the CARI Health report, taken from the client-approved
+# reference ("CARI Health_DD Report_UPDATED_Nov 10 2026"). Scored by
+# app/golden.py (POST /jobs/{id}/golden-eval, or scripts/golden_eval.py).
+#
+# Each fact:
+#   report:  the report key(s) it should appear in (app/sections_spec.py)
+#   all:     regexes that must ALL match the report's text (case-insensitive)
+#            -- a string match passes the fact without an LLM call
+#   claim:   what the fact says; facts that fail the string match are graded
+#            against the report text by one batched Haiku call
+company: CARI Health
+legal_name: CARI Health, Inc.
+
+facts:
+  # ---- IP
+  - id: pct_application
+    report: [ip]
+    all: ['PCT/US2026/028473']
+    claim: PCT application PCT/US2026/028473 was filed on May 15, 2026 claiming priority to provisional 63/806,333 (filed May 15, 2025).
+  - id: pct_assignment_recorded
+    report: [ip]
+    all: ['assign', 'record']
+    claim: The PCT application and the 2026 provisionals are assigned to the Company and the assignments are recorded at the USPTO (August 18, 2026); they are not "unconfirmed".
+  - id: provisional_064067115
+    report: [ip]
+    all: ['64/067,115']
+    claim: US provisional 64/067,115 (segregation of detection elements in multiplex assays) was filed May 15, 2026 and assigned.
+  - id: provisional_064122780
+    report: [ip]
+    all: ['64/122,780']
+    claim: US provisional 64/122,780 (whole blood processing for hematocrit-corrected measurement) was filed July 30, 2026 and assigned.
+  - id: patent_landscape
+    report: [ip]
+    all: ['landscape']
+    claim: Patent counsel (Procopio) completed a patent landscape review and found no active, relevant patent documents; a formal FTO opinion is planned after design freeze.
+  - id: no_issued_patents
+    report: [ip]
+    all: ['no issued patent|no patents have (been )?issued|none (has|have) issued|pending']
+    claim: The Company has pending filings and no issued patents.
+
+  # ---- corporate / legal / deal
+  - id: ira_executed
+    report: [corp_legal, contracts]
+    all: ["Investors.? Rights Agreement", 'July 9, 2024']
+    claim: The executed Investors' Rights Agreement dated July 9, 2024 is in the data room.
+  - id: warrants_all_seven
+    report: [corp_legal, contracts]
+    all: ['warrant', 'seven|all 7|7 (Series 2025A )?noteholders']
+    claim: Executed warrants exist for all seven Series 2025A noteholders.
+  - id: seed2_terms
+    report: [financial, corp_legal, executive_summary]
+    all: ['\$9\.0 million|\$9M|\$9,000,000', '20%', '6%']
+    claim: The open Seed 2 round is a $1.0 million convertible note with a $9.0 million pre-money cap, 20% discount, 6% interest and 25% warrant coverage on the first $750,000.
+  - id: seed2_funded
+    report: [financial, corp_legal, executive_summary]
+    all: ['\$280,000']
+    claim: $280,000 of the Seed 2 / Series 2025A notes is funded (seven notes).
+  - id: charter_authorized_shares
+    report: [corp_legal]
+    all: ['8,216,000']
+    claim: The charter authorizes 8,216,000 common and 1,750,605 preferred shares (Series Seed I and II).
+  - id: charter_antidilution
+    report: [corp_legal]
+    all: ['weighted[- ]average', 'anti-?dilution']
+    claim: The charter has a broad-based weighted-average anti-dilution adjustment, Series Seed protective provisions and deemed-liquidation redemption rights.
+  - id: antidilution_waiver
+    report: [corp_legal, financial, contracts, open_items]
+    all: ['anti-?dilution', 'waive']
+    claim: Converting the Seed 2 notes below the Series Seed prices triggers the charter's weighted-average anti-dilution unless waived; a waiver is recommended.
+  - id: fully_diluted
+    report: [corp_legal, financial]
+    all: ['7,698,766']
+    claim: The October 27, 2026 cap table shows 6,232,188 shares outstanding and 7,698,766 fully diluted shares; the founder holds 63.5% of outstanding and 51.4% of fully diluted.
+  - id: founder_ownership
+    report: [corp_legal, financial, hr]
+    all: ['63\.5%|51\.4%']
+    claim: The founder holds 63.5% of outstanding and 51.4% of fully diluted shares.
+  - id: equity_plan
+    report: [corp_legal, hr]
+    all: ['1,878,661']
+    claim: The 2021 Equity Incentive Plan reserves 1,878,661 shares.
+  - id: form_d
+    report: [corp_legal]
+    all: ['Form D']
+    claim: A Form D was accepted July 21, 2025 and a Form D amendment ($1.0M offered, $280,000 sold to seven investors) was accepted November 6, 2026.
+  - id: carta_409a
+    report: [financial, corp_legal, hr]
+    all: ['409A', 'December 5, 2025|Dec\.? 5, 2025']
+    claim: The final Carta Section 409A report has a valuation date of December 5, 2025 (issued January 7, 2026).
+  - id: cove_side_letter
+    report: [corp_legal, contracts]
+    all: ['Cove']
+    claim: The executed second amended and restated Cove Fund side letter (June 20, 2025) grants a conditional board designation right and observer rights; Cove's $100,000 is contingent on $400,000 of notes being sold.
+
+  # ---- financial
+  - id: h1_2026_cash
+    report: [financial]
+    all: ['195,061']
+    claim: At June 30, 2026 the balance sheet showed cash of $195,061.
+  - id: h1_2026_balance
+    report: [financial]
+    all: ['334,827|192,832|141,995']
+    claim: At June 30, 2026 total assets were $334,827, total liabilities $192,832 and equity $141,995.
+  - id: fy2024_statements
+    report: [financial]
+    all: ['2024']
+    claim: The FY2024 balance sheet and statement of cash flows are in the data room and reviewed (not reported as missing).
+  - id: revenue_forecast
+    report: [financial, commercial, executive_summary]
+    all: ['83\.6']
+    claim: The model forecasts $18,000 of RUO revenue in 2027, $1.9 million in 2028 and $83.6 million in 2032.
+  - id: downside_48_3
+    report: [financial, commercial]
+    all: ['48\.3']
+    claim: Downside at 15% national share gives 2032 revenue of $48.3 million.
+  - id: downside_32_2
+    report: [financial, commercial]
+    all: ['32\.2']
+    claim: Downside at 10% share gives 2032 revenue of $32.2 million.
+  - id: downside_14_5
+    report: [financial, commercial]
+    all: ['14\.5']
+    claim: The worst case (10% share plus a 12-month clearance delay) gives 2032 revenue of $14.5 million.
+  - id: extra_capital_11_9
+    report: [financial]
+    all: ['11\.9']
+    claim: The 10% share with 12-month delay case needs up to about $11.9 million of additional capital.
+  - id: scenario5
+    report: [financial]
+    all: ['37\.7']
+    claim: Scenario 5 of the November 2, 2026 model (12-month delay at base penetration) gives 2032 revenue of $37.7M and EBITDA of $15.8M with about $0.3M of additional capital.
+  - id: test_price
+    report: [financial, commercial]
+    all: ['\$60']
+    claim: The $60 test price is the model's largest single sensitivity.
+
+  # ---- team / HR
+  - id: mcfarland_mismatch
+    report: [hr, executive_summary]
+    all: ['152,000', '157,000']
+    claim: McFarland's option grant is 157,000 while his October 8, 2025 offer letter specified 152,000 -- a mismatch the Company should explain.
+  - id: offer_letters_present
+    report: [hr]
+    all: ['McFarland', 'Russell', 'offer letter']
+    claim: Signed offer letters for McFarland, Chon and Russell are in the data room.
+  - id: ceo_ciiaa
+    report: [hr, ip, corp_legal]
+    all: ['CIIAA|Inventions? Assignment']
+    claim: The CEO signed a Confidential Information Non-Disclosure and Inventions Assignment Agreement (CIIAA), whose form the board approved November 5-6, 2026.
+  - id: sherrick_conflict
+    report: [hr, regulatory, scitech, executive_summary]
+    all: ['Sherrick']
+    claim: Robert Sherrick of Community Medical Services, the pilot site, is a former advisory board member who left in December 2025 to avoid the appearance of a conflict -- a conflict of interest to disclose.
+  - id: team_size
+    report: [hr]
+    all: ['four employees|4 employees']
+    claim: The Company has four employees and a vacant CSO role.
+
+  # ---- science / regulatory
+  - id: whole_blood
+    report: [scitech, regulatory]
+    all: ['whole[- ]blood']
+    claim: The test is a quantitative point-of-care methadone and EDDP whole-blood test (placed reader plus single-use cassette), not a fingerstick test.
+  - id: presub_q250159
+    report: [regulatory]
+    all: ['Q250159|Pre-Submission']
+    claim: FDA Pre-Submission Q250159 minutes are dated April 3, 2025.
+  - id: arup_agreement
+    report: [contracts, scitech, regulatory, commercial]
+    all: ['ARUP']
+    claim: A Master Testing Service Agreement with ARUP Laboratories is effective September 9, 2026.
+
+  # ---- competition / exit
+  - id: ark_profiled
+    report: [competition, competition_supp]
+    all: ['\bARK\b']
+    claim: ARK Diagnostics (acquired by ARCHIMED for $428M, about 7.5x revenue) is profiled as a competitor.
+  - id: procisedx_profiled
+    report: [competition, competition_supp]
+    all: ['ProciseDx']
+    claim: ProciseDx is profiled as a competitor.
+  - id: spinchip_profiled
+    report: [competition, competition_supp, exit_report]
+    all: ['SpinChip']
+    claim: SpinChip (acquired by bioMerieux for about $140M, pre-commercial) is profiled or cited as a comparable.
+  - id: thermo_acquirer
+    report: [acquirers, exit_report, exit_summary]
+    all: ['Thermo Fisher']
+    claim: Thermo Fisher is on the potential acquirer list.
+  - id: quidelortho_acquirer
+    report: [acquirers, exit_report]
+    all: ['QuidelOrtho']
+    claim: QuidelOrtho is on the potential acquirer list.
+
+# Statements that must NOT appear anywhere.
+forbidden:
+  - id: name_leak
+    patterns: ['\bZZ\b', 'delete me', 'Stage 2 Test']
+  - id: search_cap_wording
+    patterns: ['search[- ]tool cap', 'search cap', 'cap was reached', 'search limit']
+
+# Documents that ARE in the reference data room: any sentence naming one of
+# these together with an absence phrase is a false "missing" claim.
+present_documents:
+  - id: ira
+    patterns: ["Investors.? Rights Agreement"]
+  - id: warrants
+    patterns: ['warrants? (for|of) (all|the) (seven|7)', '2025A warrants?', 'executed warrants?']
+  - id: mcfarland_offer
+    patterns: ['McFarland.{0,40}offer letter', 'offer letter.{0,40}McFarland']
+  - id: russell_offer
+    patterns: ['Russell.{0,40}offer letter', 'offer letter.{0,40}Russell']
+  - id: consulting_agreements
+    patterns: ['consulting agreements?']
+  - id: fy2024_financials
+    patterns: ['(FY ?|fiscal )?2024 (financial statements|balance sheet|statement of cash flows)']
+  - id: h1_2026_financials
+    patterns: ['(June|H1|first half|Jan.{0,12}Jun\w*) 2026 (financial statements|balance sheet|P ?& ?L|financials)']
+  - id: carta_409a
+    patterns: ['Carta.{0,40}409A', '409A.{0,40}Carta', 'December 2025 409A']
+  - id: pct
+    patterns: ['PCT (application|filing)']
+  - id: assignments
+    patterns: ['(patent|invention) assignments?']
+  - id: landscape
+    patterns: ['patent landscape']
+
+absence_phrases:
+  - 'not (in|included in|present in|provided in|found in|located in) the data ?room'
+  - 'not (been )?(provided|included|located|found|seen)'
+  - '\bmissing\b'
+  - '\babsent\b'
+  - 'could not (be )?(confirm|verif|locat)'
+  - '\bunconfirmed\b'
+  - '\bno (executed|signed)\b'
+  - 'does not contain'
+  - 'were not reviewed'

@@ -30,7 +30,7 @@ _current: contextvars.ContextVar[tuple | None] = contextvars.ContextVar("usage_t
 
 @contextlib.contextmanager
 def task_context(job_id, task_id):
-    token = _current.set((str(job_id), str(task_id)))
+    token = _current.set((str(job_id), str(task_id) if task_id is not None else None))
     try:
         yield
     finally:

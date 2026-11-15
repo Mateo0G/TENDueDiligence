@@ -17,3 +17,4 @@ pypdf>=4.2
 # one of them came back unreadable.
 cryptography>=42
 python-pptx>=1.0
+pyyaml>=6.0

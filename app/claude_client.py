@@ -489,6 +489,42 @@ def score_assessment(spec: QASpec, company_name: str, report_text: str, dataroom
     return parse_structured_response(response, QAScoreOutput)
 
 
+# ------------------------------------------------------------- golden eval --
+
+class _GoldenVerdict(__import__("pydantic").BaseModel):
+    id: str
+    present: bool
+    evidence: str
+
+
+class _GoldenVerdicts(__import__("pydantic").BaseModel):
+    verdicts: list[_GoldenVerdict]
+
+
+def grade_golden_facts(items: list[tuple[str, str, str]]) -> dict[str, dict]:
+    """items: (fact id, claim, report text). One Haiku call decides whether
+    each report states the claim (same substance; wording may differ).
+    Returns id -> {present, evidence}."""
+    parts = []
+    for fid, claim, text in items:
+        parts.append(f"=== Fact {fid} ===\nClaim: {claim}\nReport text:\n{text}")
+    response = _create(
+        _client(), "eval:golden",
+        model=READ_MODEL,
+        max_tokens=8000,
+        system=("You check whether a due diligence report states specific facts. A fact is present only if the "
+                "report states its substance correctly (figures, names and dates must match; wording may differ). "
+                "A report that says the fact is missing, unconfirmed or unknown does NOT state it. "
+                "Respond with JSON only."),
+        output_config=_output_config(_GoldenVerdicts, None, READ_MODEL),
+        messages=[{"role": "user", "content": (
+            "For each fact below, return a verdict with its id, whether the report text states it, and a short "
+            "quote (<= 30 words) as evidence (\"\" if absent).\n\n" + "\n\n".join(parts))}],
+    )
+    out = parse_structured_response(response, _GoldenVerdicts)
+    return {v.id: {"present": v.present, "evidence": v.evidence} for v in out.verdicts}
+
+
 # --------------------------------------------------------- gap/mitigation --
 
 GAP_ANALYSIS_SYSTEM_PROMPT = """\

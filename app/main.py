@@ -501,6 +501,64 @@ class UsageOut(BaseModel):
     rows: list[UsageRow]
 
 
+def _usage_stage(purpose: str) -> str:
+    if purpose.startswith("eval:"):
+        return "evaluation (not report cost)"
+    if purpose.startswith(("read", "ocr", "fact_card")):
+        return "1 ingestion"
+    if purpose.startswith(("research",)):
+        return "2a research"
+    if purpose.startswith(("key_facts", "cache_warmup", "draft:", "absence")):
+        return "2b drafting"
+    if purpose.startswith("qa"):
+        return "4 QA"
+    return "5 gap analysis"
+
+
+@app.get("/jobs/{job_id}/cost_report.json")
+def cost_report(job_id: str):
+    """Per-run cost report: every Claude call of the job with its tokens and
+    dollar cost, totals by stage and by purpose (section), and the report's
+    total excluding evaluation calls."""
+    job = _require_job(job_id)
+    calls = repo.list_api_usage(job_id)
+    stages: dict[str, dict] = {}
+    purposes: dict[str, dict] = {}
+    keys = ("input_tokens", "output_tokens", "cache_write_tokens", "cache_read_tokens", "web_searches")
+    for c in calls:
+        cost = float(c["cost_usd"])
+        for bucket, name in ((stages, _usage_stage(c["purpose"])), (purposes, c["purpose"])):
+            b = bucket.setdefault(name, {"calls": 0, "cost_usd": 0.0, **{k: 0 for k in keys}})
+            b["calls"] += 1
+            b["cost_usd"] = round(b["cost_usd"] + cost, 5)
+            for k in keys:
+                b[k] += c[k]
+    report_total = sum(v["cost_usd"] for k, v in stages.items() if not k.startswith("evaluation"))
+    return {
+        "job_id": job_id,
+        "company_name": job["company_name"],
+        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "report_total_usd": round(report_total, 4),
+        "evaluation_total_usd": round(sum(v["cost_usd"] for k, v in stages.items() if k.startswith("evaluation")), 4),
+        "by_stage": dict(sorted(stages.items())),
+        "by_purpose": dict(sorted(purposes.items(), key=lambda kv: -kv[1]["cost_usd"])),
+        "calls": [{"purpose": c["purpose"], "model": c["model"], **{k: c[k] for k in keys},
+                   "cost_usd": float(c["cost_usd"]), "at": c["created_at"].isoformat()} for c in calls],
+    }
+
+
+@app.post("/jobs/{job_id}/golden-eval")
+def golden_eval(job_id: str, name: str = "cari_health"):
+    """Score this job's drafted report against tests/golden/<name>.yaml (see
+    app/golden.py). Costs one small Haiku call, recorded as evaluation."""
+    _require_job(job_id)
+    from app import golden
+    try:
+        return golden.evaluate_recorded(job_id, name)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"no golden set named {name!r}")
+
+
 @app.get("/jobs/{job_id}/usage", response_model=UsageOut)
 def job_usage(job_id: str):
     """What this job's Claude calls actually cost, grouped by purpose (read,
