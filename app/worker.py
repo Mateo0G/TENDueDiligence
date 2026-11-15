@@ -6,7 +6,7 @@ import socket
 import time
 
 from app import repo, usage
-from app.tasks.registry import get_handler
+from app.tasks.registry import TaskDeferred, get_handler
 import app.tasks  # noqa: F401  (registers handlers)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -51,6 +51,9 @@ def run_one_task(worker_id: str) -> bool:
         handler = get_handler(task["task_type"])
         with usage.task_context(task["job_id"], task["id"]):
             result = handler(task)
+    except TaskDeferred as deferred:
+        log.info("[%s] task %s deferred %ss: %s", worker_id, task["id"], deferred.seconds, deferred)
+        repo.defer_task(task["id"], deferred.seconds, deferred.payload)
     except Exception as exc:
         log.exception("[%s] task %s failed", worker_id, task["id"])
         repo.fail_task(task["id"], str(exc))

@@ -11,6 +11,8 @@ Create Date: 2026-11-15 00:00:00.000000
 - extraction_cache: extracted pages and fact card per file content hash,
   shared across jobs, so re-uploading a data room costs nothing for files
   that haven't changed.
+- tasks.run_after: a task waiting on something external (a Message Batch)
+  is put back to pending with a time before which it isn't claimed again.
 """
 from typing import Sequence, Union
 
@@ -42,6 +44,7 @@ def upgrade() -> None:
         """
     )
     op.execute("CREATE INDEX ix_document_pages_job_hash ON document_pages (job_id, text_hash)")
+    op.execute("ALTER TABLE tasks ADD COLUMN run_after TIMESTAMPTZ")
     op.execute("ALTER TABLE dataroom_files ADD COLUMN page_count INTEGER")
     op.execute("ALTER TABLE dataroom_files ADD COLUMN pages_extracted INTEGER")
     op.execute("ALTER TABLE dataroom_files ADD COLUMN extraction_method TEXT")
@@ -67,6 +70,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.execute("DROP TABLE extraction_cache")
+    op.execute("ALTER TABLE tasks DROP COLUMN run_after")
     op.execute("ALTER TABLE dataroom_files DROP COLUMN executed")
     op.execute("ALTER TABLE dataroom_files DROP COLUMN extraction_method")
     op.execute("ALTER TABLE dataroom_files DROP COLUMN pages_extracted")

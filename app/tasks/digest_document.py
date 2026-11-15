@@ -9,4 +9,5 @@ from app.tasks.registry import register
 def run_digest_document(task: dict) -> dict:
     payload = task["payload"]
     final_attempt = task["attempts"] + 1 >= repo.MAX_TASK_ATTEMPTS
-    return reading.read_files(payload["job_id"], payload["company_name"], [payload["file_id"]], final_attempt)
+    return reading.read_files(payload["job_id"], payload["company_name"], [payload["file_id"]], final_attempt,
+                              task=task)

@@ -26,6 +26,7 @@ _CLAIM_SQL = f"""
         SELECT id FROM tasks
         WHERE (status = 'pending'
                OR (status = 'running' AND locked_at < now() - interval '{STALE_LOCK_MINUTES} minutes'))
+          AND (run_after IS NULL OR run_after <= now())
           AND NOT EXISTS (
               SELECT 1 FROM tasks dep
               WHERE dep.id = ANY(tasks.depends_on) AND dep.status <> 'completed'
@@ -144,6 +145,21 @@ def fail_task(task_id, error: str) -> None:
             WHERE id = %(task_id)s
             """,
             {"task_id": task_id, "error": error, "max_attempts": MAX_TASK_ATTEMPTS},
+        )
+
+
+def defer_task(task_id, seconds: int, payload: dict | None = None) -> None:
+    """Back to pending, not to be claimed for `seconds` -- for a task
+    waiting on something external (a Message Batch). Not a failure:
+    attempts is unchanged. `payload`, if given, replaces the task's payload
+    (so the next run knows what it is waiting for)."""
+    with pool.connection() as conn:
+        if payload is not None:
+            conn.execute("UPDATE tasks SET payload=%s WHERE id=%s", (Json(payload), task_id))
+        conn.execute(
+            "UPDATE tasks SET status='pending', locked_by=NULL, locked_at=NULL, "
+            "run_after = now() + make_interval(secs => %s), updated_at=now() WHERE id=%s",
+            (seconds, task_id),
         )
 
 

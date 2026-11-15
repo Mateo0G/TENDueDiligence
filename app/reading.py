@@ -19,9 +19,11 @@ Per file (app/ingest.py does the extraction):
    warrant or consent form signed by different investors) is not re-read.
 """
 import hashlib
+import json
 import logging
 import os
 import re
+import time
 
 from app import claude_client, evidence, ingest, repo, storage
 
@@ -38,6 +40,10 @@ LONG_HEAD_PAGES = max(LONG_DOC_PAGES // 2, 3)
 LONG_TAIL_PAGES = max(LONG_DOC_PAGES // 6, 1)
 VISION_PAGE_LIMIT = int(os.environ.get("VISION_PAGE_LIMIT", "60"))          # per data room
 SIGNATURE_VISION_LIMIT = int(os.environ.get("SIGNATURE_VISION_LIMIT", "40"))  # per data room
+# Fact cards via the Message Batches API (half price; results usually in minutes).
+READ_BATCH = os.environ.get("READ_BATCH", "1") != "0"
+BATCH_POLL_SECONDS = 30
+BATCH_MAX_WAIT_SECONDS = int(os.environ.get("BATCH_MAX_WAIT_SECONDS", str(90 * 60)))
 
 _ROUTINE = re.compile(
     r"bank[ _-]?statement|statement[ _-]?\d|invoice|receipt|\bw-?9\b|\bw-?2\b|1099|certificate of (good standing|"
@@ -265,16 +271,13 @@ def _extract(job_id, f: dict, data: bytes) -> tuple[ingest.Extraction | None, li
     return ext, [_page_dict(p) for p in ext.pages], ext.kind, sig_pages, executed
 
 
-def read_files(job_id, company_name: str, file_ids: list[str], final_attempt: bool) -> dict:
-    """Ingest every file in `file_ids` that has no digest yet. Raises (so the
-    task retries) on API errors unless `final_attempt`, when affected files
-    get a fallback digest instead -- Key Facts depends on every reading
-    task, so a reading task must always end up complete."""
-    stats = {"cached": 0, "read": 0, "duplicates": 0, "unreadable": 0, "failed": 0,
-             "pages": 0, "pages_extracted": 0, "ocr": 0, "vision": 0}
+def _prepare(job_id, file_ids: list[str], stats: dict) -> list[dict]:
+    """Extract (or load from cache) every not-yet-read file, store its
+    pages and coverage, settle cached/duplicate/unreadable files directly,
+    and return the rest as fact-card work: dicts with file_id, path, sha,
+    kind, page_count, executed, meta, chunks."""
     seen = repo.job_page_hashes(job_id)
-    todo = []  # files needing a fact card
-
+    todo = []
     for file_id in file_ids:
         f = repo.get_dataroom_file(file_id)
         if f is None or f.get("digest"):
@@ -305,6 +308,8 @@ def read_files(job_id, company_name: str, file_ids: list[str], final_attempt: bo
                               for p in pages if p["text"].strip())
         meta = {"pages_total": page_count, "pages_extracted": extracted, "page_methods": methods,
                 "executed_local": executed, "text_chars": len(full_text), "read_model": claude_client.READ_MODEL}
+        if error:
+            meta["extraction_error"] = error
         if full_text.strip():
             key = evidence.text_key(job_id, file_id)
             storage.put_bytes(key, full_text.encode("utf-8"), content_type="text/plain; charset=utf-8")
@@ -329,11 +334,15 @@ def read_files(job_id, company_name: str, file_ids: list[str], final_attempt: bo
         mode = read_mode(f)
         text, n_read = _model_text(f, pages, seen, mode)
         meta.update({"read_mode": mode, "pages_read": n_read})
-        todo.append({"file": f, "sha": sha, "kind": kind, "page_count": page_count, "pages": pages,
-                     "executed": executed, "meta": meta, "chunks": _chunks(text)})
+        todo.append({"file_id": str(file_id), "path": file_path_label(f), "sha": sha, "kind": kind,
+                     "page_count": page_count, "executed": executed, "meta": meta, "chunks": _chunks(text)})
+    return todo
 
-    # Fact cards: chunks of all files packed into as few calls as possible.
-    entries = [(d, i, c) for d in todo for i, c in enumerate(d["chunks"])]
+
+def _groups(todo: list[dict]) -> list[list[list]]:
+    """Chunks of all files packed into as few calls as possible; each entry
+    is [todo index, chunk index, text]."""
+    entries = [[t, i, c] for t, d in enumerate(todo) for i, c in enumerate(d["chunks"])]
     groups, cur, size = [], [], 0
     for e in sorted(entries, key=lambda e: -len(e[2])):
         if cur and (size + len(e[2]) > CALL_CHARS or len(cur) >= MAX_DOCS_PER_CALL):
@@ -343,43 +352,133 @@ def read_files(job_id, company_name: str, file_ids: list[str], final_attempt: bo
         size += len(e[2])
     if cur:
         groups.append(cur)
+    return groups
 
-    cards: dict[int, dict[int, object]] = {}
-    errors = []
+
+def _group_entries(todo: list[dict], group: list[list]) -> list[tuple]:
+    out = []
+    for n, (t, i, text) in enumerate(group):
+        d = todo[t]
+        note = f"part {i + 1} of {len(d['chunks'])}" if len(d["chunks"]) > 1 else ""
+        out.append((n + 1, d["path"], note, text))
+    return out
+
+
+def _absorb(cards: dict, group: list[list], out) -> None:
+    by_num = {c.doc: c for c in out.cards}
+    for n, (t, i, _) in enumerate(group):
+        if (n + 1) in by_num:
+            cards.setdefault(t, {})[i] = by_num[n + 1]
+
+
+def _cards_sync(company_name: str, todo: list[dict], groups: list, cards: dict, errors: list) -> None:
     for group in groups:
         try:
-            out = claude_client.read_fact_cards(company_name, [
-                (n + 1, file_path_label(d["file"]),
-                 f"part {i + 1} of {len(d['chunks'])}" if len(d["chunks"]) > 1 else "", text)
-                for n, (d, i, text) in enumerate(group)
-            ])
+            _absorb(cards, group, claude_client.read_fact_cards(company_name, _group_entries(todo, group)))
         except Exception as exc:
             errors.append(exc)
-            continue
-        by_num = {c.doc: c for c in out.cards}
-        for n, (d, i, _) in enumerate(group):
-            if (n + 1) in by_num:
-                cards.setdefault(id(d), {})[i] = by_num[n + 1]
 
-    for d in todo:
-        got = cards.get(id(d), {})
-        f = d["file"]
+
+def _finalize(job_id, todo: list[dict], cards: dict, errors: list, final_attempt: bool, stats: dict) -> dict:
+    for t, d in enumerate(todo):
+        got = cards.get(t, {})
+        f = repo.get_dataroom_file(d["file_id"])
+        if f is None or f.get("digest"):
+            continue
         if len(got) < len(d["chunks"]):
             if not final_attempt:
-                continue  # retried below
+                continue  # the task is retried
             if not got:
-                repo.set_file_digest(str(f["id"]), _fallback_digest(f, str(errors[0]) if errors else
-                                                                     "the reading model returned no card", d["meta"]))
+                repo.set_file_digest(d["file_id"], _fallback_digest(
+                    f, str(errors[0]) if errors else "the reading model returned no card", d["meta"]))
                 stats["failed"] += 1
                 continue
         card = _merge([got[i] for i in sorted(got)])
-        repo.set_file_digest(str(f["id"]), card_to_digest(card, f, d["meta"]))
-        repo.put_extraction_cache(d["sha"], ingest.EXTRACT_VERSION, d["kind"], d["page_count"], d["pages"],
-                                  d["executed"], card, CARD_VERSION)
+        repo.set_file_digest(d["file_id"], card_to_digest(card, f, d["meta"]))
+        cached = repo.get_extraction_cache(d["sha"], ingest.EXTRACT_VERSION)
+        repo.put_extraction_cache(d["sha"], ingest.EXTRACT_VERSION, d["kind"], d["page_count"],
+                                  cached["pages"] if cached else [], d["executed"], card, CARD_VERSION)
         stats["read"] += 1
-
-    missing = [d for d in todo if len(cards.get(id(d), {})) < len(d["chunks"])]
+    missing = [d for t, d in enumerate(todo) if len(cards.get(t, {})) < len(d["chunks"])]
     if missing and not final_attempt:
-        raise RuntimeError(f"{len(missing)} file(s) not fully read; retrying"
-                           + (f": {errors[0]}" if errors else ""))
+        raise RuntimeError(f"{len(missing)} file(s) not fully read; retrying" + (f": {errors[0]}" if errors else ""))
     return stats
+
+
+def _new_stats() -> dict:
+    return {"cached": 0, "read": 0, "duplicates": 0, "unreadable": 0, "failed": 0,
+            "pages": 0, "pages_extracted": 0, "ocr": 0, "vision": 0}
+
+
+def read_files(job_id, company_name: str, file_ids: list[str], final_attempt: bool, task: dict | None = None) -> dict:
+    """Ingest every file in `file_ids` that has no digest yet.
+
+    With READ_BATCH on (the default) and a task to defer, the fact cards go
+    to the Message Batches API at half price: the task submits the batch,
+    saves what it needs to storage, and defers itself; each later run
+    checks the batch and, once it has ended, writes the cards (any request
+    that failed is redone synchronously). A batch still running after
+    BATCH_MAX_WAIT_SECONDS is cancelled and finished synchronously, so a
+    slow batch can delay reading but never stall it.
+
+    Raises (so the task retries) on API errors unless `final_attempt`, when
+    affected files get a fallback digest -- Key Facts depends on every
+    reading task, so a reading task must always end up complete."""
+    from app.tasks.registry import TaskDeferred
+
+    payload = (task or {}).get("payload") or {}
+    if payload.get("batch"):
+        return _collect(job_id, company_name, payload["batch"], final_attempt)
+
+    stats = _new_stats()
+    todo = _prepare(job_id, file_ids, stats)
+    groups = _groups(todo)
+    if not groups:
+        return stats
+    if READ_BATCH and task is not None and not final_attempt:
+        key = f"batches/{job_id}/{task['id']}.json"
+        storage.put_bytes(key, json.dumps({"todo": todo, "groups": groups, "stats": stats}).encode("utf-8"),
+                          content_type="application/json")
+        batch_id = claude_client.submit_batch([
+            (f"g{n}", claude_client.build_fact_card_request(company_name, _group_entries(todo, g)))
+            for n, g in enumerate(groups)])
+        raise TaskDeferred(BATCH_POLL_SECONDS, {**payload, "batch": {"id": batch_id, "key": key,
+                                                                     "submitted": time.time()}},
+                           reason=f"fact cards submitted as batch {batch_id}")
+    cards, errors = {}, []
+    _cards_sync(company_name, todo, groups, cards, errors)
+    return _finalize(job_id, todo, cards, errors, final_attempt, stats)
+
+
+def _collect(job_id, company_name: str, batch: dict, final_attempt: bool) -> dict:
+    from app.tasks.registry import TaskDeferred
+
+    spec = json.loads(storage.get_bytes(batch["key"]).decode("utf-8"))
+    todo, groups, stats = spec["todo"], spec["groups"], spec["stats"]
+    status = claude_client.batch_status(batch["id"])
+    timed_out = time.time() - batch["submitted"] > BATCH_MAX_WAIT_SECONDS
+    if status != "ended" and not timed_out and not final_attempt:
+        raise TaskDeferred(BATCH_POLL_SECONDS, reason=f"batch {batch['id']} {status}")
+
+    cards, errors = {}, []
+    if status == "ended":
+        results = claude_client.batch_fact_cards(batch["id"])
+        redo = []
+        for n, g in enumerate(groups):
+            out = results.get(f"g{n}")
+            if out is None:
+                redo.append(g)
+            else:
+                _absorb(cards, g, out)
+    else:
+        log.warning("batch %s still %s after %.0f min; finishing synchronously", batch["id"], status,
+                    (time.time() - batch["submitted"]) / 60)
+        claude_client.cancel_batch(batch["id"])
+        redo = groups
+    _cards_sync(company_name, todo, redo, cards, errors)
+    result = _finalize(job_id, todo, cards, errors, final_attempt, stats)
+    try:
+        storage.delete(batch["key"])
+    except Exception:
+        pass
+    return {**result, "batch": batch["id"], "batch_redone_groups": len(redo)}

@@ -49,7 +49,7 @@ def _get(obj, name, default=0):
     return value if value is not None else default
 
 
-def cost_of(model: str, usage) -> dict:
+def cost_of(model: str, usage, batch: bool = False) -> dict:
     """Token counts and dollar cost of one response's `usage`."""
     price_in, price_out = _price(model)
     inp = _get(usage, "input_tokens")
@@ -67,12 +67,14 @@ def cost_of(model: str, usage) -> dict:
         + write_1h * price_in * 2.0
         + read * price_in * 0.1
     ) / 1_000_000 + searches * WEB_SEARCH_USD
+    if batch:  # Message Batches API: 50% of standard prices
+        cost *= 0.5
     return {"input_tokens": inp, "output_tokens": out, "cache_write_tokens": write,
             "cache_read_tokens": read, "web_searches": searches, "cost_usd": round(cost, 5)}
 
 
-def record(purpose: str, model: str, response) -> dict:
-    stats = cost_of(model, getattr(response, "usage", None))
+def record(purpose: str, model: str, response, batch: bool = False) -> dict:
+    stats = cost_of(model, getattr(response, "usage", None), batch)
     ctx = _current.get()
     log.info("api call %s %s: in=%s out=%s cache_w=%s cache_r=%s web=%s $%.4f", purpose, model,
              stats["input_tokens"], stats["output_tokens"], stats["cache_write_tokens"],

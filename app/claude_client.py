@@ -169,22 +169,63 @@ Respond with JSON only, matching the schema.
 """
 
 
-def read_fact_cards(company_name: str, entries: list[tuple[int, str, str, str]]) -> FactCardOutput:
-    """entries: (number, dataroom path, heading note, text with [page N] markers).
-    One card per entry."""
+def build_fact_card_request(company_name: str, entries: list) -> dict:
+    """entries: (number, dataroom path, heading note, text with [page N]
+    markers). One card per entry. Same params for the synchronous call and
+    a Message Batch request."""
     parts = [f"Company under diligence: {company_name}\n\nWrite one fact card per numbered document below "
              f"({len(entries)} in total), with its number in `doc`."]
     for n, path, note, text in entries:
         parts.append(f"=== Document {n} ===\nPath: {path}{(' -- ' + note) if note else ''}\n\n{text}")
-    response = _create(
-        _client(), "read",
+    return dict(
         model=READ_MODEL,
         max_tokens=24000,
         system=READ_SYSTEM_PROMPT,
         output_config=_output_config(FactCardOutput, "low", READ_MODEL),
         messages=[{"role": "user", "content": "\n\n".join(parts)}],
     )
+
+
+def read_fact_cards(company_name: str, entries: list) -> FactCardOutput:
+    response = _create(_client(), "read", **build_fact_card_request(company_name, entries))
     return parse_structured_response(response, FactCardOutput)
+
+
+# Message Batches: half price, results usually within minutes (at most 24h).
+def submit_batch(requests: list[tuple[str, dict]]) -> str:
+    """requests: (custom_id, params). Returns the batch id."""
+    batch = _client().messages.batches.create(
+        requests=[{"custom_id": cid, "params": params} for cid, params in requests])
+    return batch.id
+
+
+def batch_status(batch_id: str) -> str:
+    return _client().messages.batches.retrieve(batch_id).processing_status
+
+
+def cancel_batch(batch_id: str) -> None:
+    try:
+        _client().messages.batches.cancel(batch_id)
+    except Exception:
+        pass
+
+
+def batch_fact_cards(batch_id: str, model: str = None) -> dict[str, FactCardOutput | None]:
+    """custom_id -> parsed cards (None for a request that errored, expired
+    or didn't parse). Each succeeded message's usage is recorded at batch
+    prices."""
+    out = {}
+    for item in _client().messages.batches.results(batch_id):
+        if item.result.type != "succeeded":
+            out[item.custom_id] = None
+            continue
+        message = item.result.message
+        usage.record("read", model or READ_MODEL, message, batch=True)
+        try:
+            out[item.custom_id] = parse_structured_response(message, FactCardOutput)
+        except Exception:
+            out[item.custom_id] = None
+    return out
 
 
 def _png_block(png: bytes) -> dict:

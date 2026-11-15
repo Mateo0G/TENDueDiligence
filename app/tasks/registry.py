@@ -19,3 +19,15 @@ def register(task_type: str):
 
 def get_handler(task_type: str) -> TaskHandler:
     return _REGISTRY[task_type]
+
+
+class TaskDeferred(Exception):
+    """Raised by a handler that is waiting on something external (a Message
+    Batch): the worker puts the task back to pending, not to be claimed for
+    `seconds`, without counting it as a failed attempt. `payload`, if given,
+    replaces the task's payload so the next run knows what it waits for."""
+
+    def __init__(self, seconds: int, payload: dict | None = None, reason: str = ""):
+        super().__init__(reason or f"deferred {seconds}s")
+        self.seconds = seconds
+        self.payload = payload
