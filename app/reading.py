@@ -468,8 +468,14 @@ def _collect(job_id, company_name: str, batch: dict, final_attempt: bool) -> dic
             out = results.get(f"g{n}")
             if out is None:
                 redo.append(g)
-            else:
-                _absorb(cards, g, out)
+                continue
+            _absorb(cards, g, out)
+            # A reply can come back without some of its documents' cards:
+            # re-request just those (the old code waited for retries that
+            # re-read the same batch result, then gave up on them).
+            missing = [e for e in g if e[1] not in cards.get(e[0], {})]
+            if missing:
+                redo.append(missing)
     else:
         log.warning("batch %s still %s after %.0f min; finishing synchronously", batch["id"], status,
                     (time.time() - batch["submitted"]) / 60)
