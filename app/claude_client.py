@@ -558,13 +558,19 @@ class _GoldenVerdicts(__import__("pydantic").BaseModel):
     verdicts: list[_GoldenVerdict]
 
 
-def grade_golden_facts(items: list[tuple[str, str, str]]) -> dict[str, dict]:
-    """items: (fact id, claim, report text). One Haiku call decides whether
-    each report states the claim (same substance; wording may differ).
-    Returns id -> {present, evidence}."""
-    parts = []
-    for fid, claim, text in items:
-        parts.append(f"=== Fact {fid} ===\nClaim: {claim}\nReport text:\n{text}")
+def grade_golden_facts(items: list[tuple[str, str, list[str]]], texts: dict[str, str]) -> dict[str, dict]:
+    """items: (fact id, claim, report keys); texts: report key -> text. One
+    Haiku call decides whether the named reports state each claim (same
+    substance; wording may differ). Each report's text is included once,
+    with the facts to check against it. Returns id -> {present, evidence}."""
+    by_reports: dict[tuple, list] = {}
+    for fid, claim, reports in items:
+        by_reports.setdefault(tuple(reports), []).append((fid, claim))
+    used = {r for reports in by_reports for r in reports}
+    parts = [f"=== Report: {r} ===\n{texts.get(r, '')}" for r in sorted(used)]
+    for reports, facts in by_reports.items():
+        parts.append(f"=== Facts to check in report(s) {', '.join(reports)} ===\n"
+                     + "\n".join(f"- [{fid}] {claim}" for fid, claim in facts))
     response = _create(
         _client(), "eval:golden",
         model=READ_MODEL,

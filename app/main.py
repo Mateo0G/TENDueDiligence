@@ -566,6 +566,8 @@ def golden_eval(job_id: str, name: str = "cari_health"):
         return golden.evaluate_recorded(job_id, name)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"no golden set named {name!r}")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"golden eval failed: {type(exc).__name__}: {exc}"[:1000])
 
 
 @app.get("/jobs/{job_id}/usage", response_model=UsageOut)

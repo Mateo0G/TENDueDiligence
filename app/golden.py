@@ -82,9 +82,14 @@ def evaluate(job_id, name: str = "cari_health", grade_with_llm: bool = True) -> 
 
     if ungraded:
         from app import claude_client
-        verdicts = claude_client.grade_golden_facts([
-            (r["id"], r["claim"], scope[:MAX_REPORT_CHARS_FOR_GRADING]) for r, scope in ungraded
-        ])
+        needed = {k for r, _ in ungraded for k in r["report"]}
+        # Each report's text once, capped so the whole call fits the reading
+        # model's context however many facts need grading.
+        cap = max(MAX_REPORT_CHARS_FOR_GRADING // max(len(needed) // 3, 1), 20_000)
+        verdicts = claude_client.grade_golden_facts(
+            [(r["id"], r["claim"], r["report"]) for r, _ in ungraded],
+            {k: texts.get(k, "")[:cap] for k in needed},
+        )
         for r, _ in ungraded:
             v = verdicts.get(r["id"])
             if v is not None:

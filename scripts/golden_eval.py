@@ -11,6 +11,7 @@ page coverage, and cost by stage.
 import argparse
 import json
 import os
+import urllib.error
 import urllib.request
 
 p = argparse.ArgumentParser()
@@ -23,8 +24,11 @@ a = p.parse_args()
 
 def call(method, path):
     req = urllib.request.Request(a.base + path, method=method)
-    with urllib.request.urlopen(req, timeout=600) as r:
-        return json.loads(r.read())
+    try:
+        with urllib.request.urlopen(req, timeout=600) as r:
+            return json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        raise SystemExit(f"{method} {path} -> HTTP {e.code}: {e.read().decode(errors='replace')[:1000]}")
 
 
 g = call("POST", f"/jobs/{a.job_id}/golden-eval?name={a.name}")
