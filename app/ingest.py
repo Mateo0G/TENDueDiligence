@@ -147,6 +147,20 @@ def _table_markdown(page) -> str:
     return "\n\n".join(out)
 
 
+MAX_RENDER_PX = 4000
+
+
+def render(page, dpi: int):
+    """Grayscale render at `dpi`, scaled down so the longer side stays under
+    MAX_RENDER_PX -- an oversized page (a poster-size scan) otherwise fails
+    with "Overly large image" and the page would go unread."""
+    import pymupdf
+
+    longest_pt = max(page.rect.width, page.rect.height) or 792
+    dpi = max(36, min(dpi, int(MAX_RENDER_PX * 72 / longest_pt)))
+    return page.get_pixmap(dpi=dpi, colorspace=pymupdf.csGRAY)
+
+
 def extract_pdf(data: bytes, ocr: bool | None = None) -> Extraction:
     import pymupdf
 
@@ -165,7 +179,7 @@ def extract_pdf(data: bytes, ocr: bool | None = None) -> Extraction:
             body = text.strip() + (f"\n\n[tables on this page]\n{tables}" if tables else "")
             pages.append(Page(i, body, "text", is_signature=bool(_SIGNATURE.search(text))))
             continue
-        pix = page.get_pixmap(dpi=OCR_DPI, colorspace=pymupdf.csGRAY)
+        pix = render(page, OCR_DPI)
         if _is_blank(pix):
             pages.append(Page(i, text.strip(), "blank"))
             continue
@@ -182,10 +196,10 @@ def extract_pdf(data: bytes, ocr: bool | None = None) -> Extraction:
                                   is_signature=bool(_SIGNATURE.search(merged) or _SIGNATURE_BLOCK.search(merged))))
                 continue
             pages.append(Page(i, merged, "none", confidence=round(conf, 1), needs_vision=True,
-                              image_png=page.get_pixmap(dpi=150, colorspace=pymupdf.csGRAY).tobytes("png")))
+                              image_png=render(page, 150).tobytes("png")))
         else:
             pages.append(Page(i, text.strip(), "none", needs_vision=True,
-                              image_png=page.get_pixmap(dpi=150, colorspace=pymupdf.csGRAY).tobytes("png")))
+                              image_png=render(page, 150).tobytes("png")))
     return Extraction("pdf", pages, doc.page_count)
 
 

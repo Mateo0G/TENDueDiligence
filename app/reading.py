@@ -231,7 +231,7 @@ def _render_page_png(data: bytes, page_no: int) -> bytes | None:
     try:
         import pymupdf
         doc = pymupdf.open(stream=data, filetype="pdf")
-        return doc[page_no - 1].get_pixmap(dpi=150, colorspace=pymupdf.csGRAY).tobytes("png")
+        return ingest.render(doc[page_no - 1], 150).tobytes("png")
     except Exception:
         return None
 
