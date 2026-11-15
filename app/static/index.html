@@ -363,7 +363,8 @@ async function renderJob() {
 
   const hasFiles = files.some(f => f.file_kind === "dataroom");
   const stage2Started = draft.total > 0;
-  const stage2Done = stage2Started && draft.done === draft.total && draft.failed === 0 && keyFacts.done === keyFacts.total;
+  const stage2Tasks = tasks.filter(t => t.stage === 2);
+  const stage2Done = stage2Started && stage2Tasks.every(t => t.status === "completed");
   const stage2Active = tasks.some(t => t.stage >= 2 && (t.status === "running"));
   const digestsRunning = readActive;
   const stage3Started = compile.total > 0;
@@ -539,7 +540,8 @@ function stage2HintText(digests, readActive, keyFacts, research, warm, draft) {
     return parts.join(" and ") + "...";
   }
   if (warm.done < warm.total) return "preparing the shared evidence for drafting...";
-  return `${draft.done}/${draft.total} report parts drafted${draft.failed ? `, ${draft.failed} failed` : ""}`;
+  if (draft.done < draft.total) return `${draft.done}/${draft.total} report parts drafted${draft.failed ? `, ${draft.failed} failed` : ""}`;
+  return "checking every \"missing document\" statement against the data room...";
 }
 
 const TAG_LABELS = {

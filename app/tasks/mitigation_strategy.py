@@ -1,7 +1,7 @@
 """Stage 5, step 2: Mitigation Strategy. Reads the Gap Analysis output (not
 the raw report again), per docs/prompt_inventory.md row 91.
 """
-from app import repo
+from app import pipeline, repo
 from app.claude_client import generate_mitigations
 from app.models import GapAnalysisOutput
 from app.tasks.registry import register
@@ -11,7 +11,7 @@ from app.tasks.registry import register
 def run_mitigation_strategy(task: dict) -> dict:
     payload = task["payload"]
     job_id = payload["job_id"]
-    company_name = payload["company_name"]
+    company_name = pipeline.company_names(payload["job_id"], payload["company_name"])[1]
 
     job = repo.get_job(job_id)
     if not job["gap_analysis"]:

@@ -230,6 +230,49 @@ def _add_field(paragraph, instruction: str, placeholder: str = "", size_pt=BODY_
     r.append(end)
 
 
+TOC_INSTRUCTION = r'TOC \o "1-2" \h \z \u'
+
+
+def _fld(kind: str):
+    el = OxmlElement("w:fldChar")
+    el.set(qn("w:fldCharType"), kind)
+    return el
+
+
+def _add_toc(doc, entries: list[tuple[int, str]]):
+    """A TOC field whose result is already filled in with the report's
+    headings (level 1 and 2), so the contents page is never empty -- even in
+    viewers that don't update fields (previews, Google Docs) or when Word's
+    "update fields?" prompt is declined. Word still refreshes it on open
+    (w:updateFields), adding page numbers."""
+    if not entries:
+        toc = doc.add_paragraph()
+        _add_field(toc, TOC_INSTRUCTION, "Right-click and choose Update Field to generate the table of contents.")
+        return
+    paragraphs = []
+    for level, title in entries:
+        p = doc.add_paragraph(style="TOC 1" if level <= 1 else "TOC 2")
+        paragraphs.append((p, title))
+    first, _ = paragraphs[0]
+    run = first.add_run()
+    r = run._element
+    instr = OxmlElement("w:instrText")
+    instr.set(qn("xml:space"), "preserve")
+    instr.text = TOC_INSTRUCTION
+    r.append(_fld("begin"))
+    r.append(instr)
+    r.append(_fld("separate"))
+    for p, title in paragraphs:
+        p.add_run(title)
+    end_run = paragraphs[-1][0].add_run()
+    end_run._element.append(_fld("end"))
+
+
+def toc_entries(report_sections: list[dict], appendices: list[tuple[int, str]] = ()) -> list[tuple[int, str]]:
+    out = [((s.get("heading_level") or 1), s["title"]) for s in report_sections if (s.get("heading_level") or 1) <= 2]
+    return out + list(appendices)
+
+
 def _add_footer(doc, company_name):
     """TEN Capital Network mark left, report title centered, page number
     right -- on every page."""
@@ -467,7 +510,8 @@ def _add_report_header(doc, meta: dict):
         _add_rich_text(p3, basis, italic=True)
 
 
-def _build_cover_and_front_matter(doc, company_name: str, logo_bytes: bytes | None = None):
+def _build_cover_and_front_matter(doc, company_name: str, logo_bytes: bytes | None = None,
+                                  toc: list[tuple[int, str]] | None = None):
     _add_footer(doc, company_name)
 
     for _ in range(4):
@@ -502,10 +546,7 @@ def _build_cover_and_front_matter(doc, company_name: str, logo_bytes: bytes | No
     toc_title.alignment = WD_ALIGN_PARAGRAPH.LEFT
     _spacing(toc_title, before=0, after=8)
     _style_run(toc_title.add_run("Contents"), 18, bold=True, color=NAVY)
-    toc = doc.add_paragraph()
-    toc.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.LEFT
-    _add_field(toc, 'TOC \\o "1-2" \\h \\z \\u',
-               "Right-click and choose Update Field to generate the table of contents.")
+    _add_toc(doc, toc or [])
 
     disclaimer = get_disclaimer_text()
     if disclaimer:
@@ -645,7 +686,7 @@ def build_report_docx(company_name: str, report_sections: list[dict], logo_bytes
     and every drafted report. report_sections: rows from
     repo.list_report_sections, already ordered by order_index."""
     doc = _new_document()
-    _build_cover_and_front_matter(doc, company_name, logo_bytes)
+    _build_cover_and_front_matter(doc, company_name, logo_bytes, toc_entries(report_sections))
     _add_coverage(doc, coverage)
     _add_report_sections(doc, report_sections)
     return _to_bytes(doc)
@@ -663,7 +704,13 @@ def build_final_report_docx(
     """The Stage 6 final render: the same reports plus the QA Report Card
     and Gap Analysis/Mitigation appendices."""
     doc = _new_document()
-    _build_cover_and_front_matter(doc, company_name, logo_bytes)
+    appendices = [(1, "Due Diligence Assessment Report Card")]
+    appendices += [(2, f"{_BLOCK_LABELS[b]} Scores") for b in ("dd_assessment", "life_science_assessment",
+                                                               "master_validation")
+                   if any(s["block"] == b and s["assessment_name"] != "Report Card of scores" for s in qa_scores)]
+    if gap_analysis:
+        appendices.append((1, "Gap Analysis & Mitigation Strategy"))
+    _build_cover_and_front_matter(doc, company_name, logo_bytes, toc_entries(report_sections, appendices))
     _add_coverage(doc, coverage)
     _add_report_sections(doc, report_sections)
     _add_qa_report_card(doc, qa_scores)

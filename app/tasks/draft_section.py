@@ -16,7 +16,8 @@ from app.tasks.registry import register
 def run_draft_section(task: dict) -> dict:
     payload = task["payload"]
     job_id = payload["job_id"]
-    company_name = payload["company_name"]
+    # The name the report prints comes from the documents (Key Facts), not the job's label.
+    company_name = pipeline.company_names(job_id, payload["company_name"])[1]
     spec = SPEC_BY_TASK_KEY.get(payload["task_key"])
     if spec is None:
         raise RuntimeError(

@@ -3,7 +3,7 @@ mitigation content into the document and re-render the final docx, per the
 brief's Stage 6 description. Reuses jobs.output_key (the same key Stage 3's
 compile_draft wrote to) -- the final docx simply overwrites the draft.
 """
-from app import repo, storage
+from app import pipeline, repo, storage
 from app.docx_builder import build_final_report_docx
 from app.tasks.registry import register
 
@@ -19,8 +19,12 @@ def run_final_render(task: dict) -> dict:
     qa_scores = repo.list_qa_scores(job_id)
     logo_bytes = storage.get_bytes(job["logo_key"]) if job["logo_key"] else None
 
+    leaks = pipeline.leaked_names(job_id, company_name, pipeline.section_texts(sections))
+    if leaks:
+        raise RuntimeError(f"the report contains test/project labels: {leaks} -- edit those sections, then retry")
+    legal_name, _ = pipeline.company_names(job_id, company_name)
     docx_bytes = build_final_report_docx(
-        company_name=company_name,
+        company_name=legal_name,
         report_sections=sections,
         qa_scores=qa_scores,
         gap_analysis=job["gap_analysis"],

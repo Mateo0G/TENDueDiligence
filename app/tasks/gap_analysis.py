@@ -10,7 +10,7 @@ from app.tasks.registry import register
 def run_gap_analysis(task: dict) -> dict:
     payload = task["payload"]
     job_id = payload["job_id"]
-    company_name = payload["company_name"]
+    company_name = pipeline.company_names(job_id, payload["company_name"])[1]
 
     # Condensed report (findings, follow-ups, conclusions): gap analysis is
     # about what the report concludes and leaves open, and the full text

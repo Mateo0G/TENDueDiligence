@@ -9,6 +9,8 @@ while the user is still uploading the pitch deck and logo. Stage 2 then
 builds the Key Facts sheet from every digest and drafts the report against
 it -- see app/evidence.py for what each drafting call sees.
 """
+import re
+
 from app import evidence, repo
 from app.reference_report import reference_words, style_excerpt
 from app.sections_spec import (
@@ -108,6 +110,10 @@ def create_stage2_tasks(job_id: str, company_name: str) -> list[str]:
         )
         task_key_to_id[spec.task_key] = task_id
         created.append(task_id)
+    # Last: check every "missing document" claim against the data room.
+    created.append(repo.create_task(job_id=job_id, stage=STAGE_DRAFTING, task_type="absence_check",
+                                    task_key="absence_check", depends_on=list(task_key_to_id.values()),
+                                    payload=payload))
     return created
 
 
@@ -411,6 +417,59 @@ def target_words(spec: SectionSpec) -> int:
         words = reference_words(report.style_h1, report.sub(sub_key).style_h2)
         total += min(max(words, 150), 1800) if words else 600
     return total
+
+
+# ----------------------------------------------------------------- names --
+
+_ENTITY = re.compile(r",?\s+(inc|llc|l\.l\.c|corp|corporation|ltd|limited|pbc|co)\.?$", re.I)
+LEAK_PATTERNS = [r"\bZZ\b", r"delete me", r"Stage 2 Test", r"\(test\)"]
+
+
+def _short_name(legal: str) -> str:
+    return _ENTITY.sub("", legal.strip()).strip(" ,")
+
+
+def _legal_from_digests(job_id, hint: str) -> str:
+    """The company's legal name as the documents state it: the entity name
+    (", Inc.", "LLC", ...) that appears most often among the parties the
+    fact cards recorded, preferring one sharing a word with `hint`."""
+    counts: dict[str, int] = {}
+    for f in repo.list_dataroom_files(job_id):
+        for party in (f.get("digest") or {}).get("parties") or []:
+            name = " ".join(str(party).split())
+            if _ENTITY.search(name) and len(name) < 80:
+                counts[name] = counts.get(name, 0) + 1
+    if not counts:
+        return ""
+    words = {w for w in re.findall(r"[a-z]{3,}", hint.lower())} - {"test", "delete", "stage", "inc", "llc"}
+    ranked = sorted(counts, key=lambda n: (-(bool(words & set(re.findall(r"[a-z]{3,}", n.lower())))), -counts[n]))
+    return ranked[0]
+
+
+def company_names(job_id, fallback: str) -> tuple[str, str]:
+    """(legal name, short name) for everything the report prints -- from the
+    Key Facts sheet (charter / cap table), else the fact cards, never the
+    job's own label (which may be a test name like "ZZ ... (delete me)")."""
+    job = repo.get_job(job_id) or {}
+    kf = job.get("key_facts") or {}
+    if kf.get("legal_name"):
+        return kf["legal_name"].strip(), (kf.get("short_name") or _short_name(kf["legal_name"])).strip()
+    legal = _legal_from_digests(job_id, fallback)
+    return (legal, _short_name(legal)) if legal else (fallback, fallback)
+
+
+def section_texts(sections: list[dict]) -> list[str]:
+    return [s["title"] + "\n" + render_blocks_as_text(s["content"]) for s in sections]
+
+
+def leaked_names(job_id, job_label: str, texts: list[str]) -> list[str]:
+    """Test/project labels that must never appear in a report."""
+    legal, short = company_names(job_id, job_label)
+    patterns = list(LEAK_PATTERNS)
+    if job_label and job_label.strip().lower() not in (legal.lower(), short.lower())             and job_label.strip().lower() not in legal.lower():
+        patterns.append(re.escape(job_label.strip()))
+    joined = "\n".join(texts)
+    return sorted({m.group(0) for p in patterns for m in re.finditer(p, joined, re.I)})
 
 
 # ---------------------------------------------------------- persistence --

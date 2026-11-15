@@ -21,7 +21,7 @@ _SPEC_BY_TASK_KEY = {
 def run_qa_score(task: dict) -> dict:
     payload = task["payload"]
     job_id = payload["job_id"]
-    company_name = payload["company_name"]
+    company_name = pipeline.company_names(job_id, payload["company_name"])[1]
     spec = _SPEC_BY_TASK_KEY[payload["task_key"]]
 
     report_text = pipeline.render_full_report_text(job_id)

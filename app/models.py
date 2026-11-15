@@ -223,6 +223,9 @@ class FactConflict(BaseModel):
 
 
 class KeyFactsOutput(BaseModel):
+    legal_name: str = Field(description="The company's exact legal name as written in its charter or cap table, "
+                                        'e.g. "CARI Health, Inc."')
+    short_name: str = Field(description='The name the company goes by in its own documents, e.g. "CARI Health"')
     company_profile: str = Field(
         description="Legal name, entity type and state, formation date, HQ, stage, and a precise "
                     "one-paragraph description of the product and its intended use"

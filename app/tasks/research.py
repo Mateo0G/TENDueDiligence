@@ -6,7 +6,7 @@ searches and re-read their results. Never blocks drafting: on its last
 attempt a failure stores an error marker and the report says public data
 could not be gathered.
 """
-from app import claude_client, evidence, repo
+from app import claude_client, evidence, pipeline, repo
 from app.tasks.registry import register
 
 
@@ -15,7 +15,8 @@ def run_research(task: dict) -> dict:
     payload = task["payload"]
     job_id = payload["job_id"]
     try:
-        result = claude_client.research_market(payload["company_name"], evidence.research_context(job_id))
+        name = pipeline.company_names(job_id, payload["company_name"])[1]
+        result = claude_client.research_market(name, evidence.research_context(job_id))
     except Exception as exc:
         if task["attempts"] + 1 < repo.MAX_TASK_ATTEMPTS:
             raise

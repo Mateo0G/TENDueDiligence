@@ -7,7 +7,7 @@ The actual docx bytes are also re-renderable on demand (GET
 currently holds, so edits made during human review are reflected
 immediately without re-running this task.
 """
-from app import repo, storage
+from app import pipeline, repo, storage
 from app.docx_builder import build_report_docx
 from app.sections_spec import section_defs
 from app.tasks.registry import register
@@ -33,7 +33,12 @@ def run_compile_draft(task: dict) -> dict:
         except Exception:
             logo_bytes = None
 
-    docx_bytes = build_report_docx(company_name, sections, logo_bytes=logo_bytes,
+    leaks = pipeline.leaked_names(job_id, company_name, pipeline.section_texts(sections))
+    if leaks:
+        raise RuntimeError(f"the draft contains test/project labels that must not appear in a report: {leaks} "
+                           f"-- edit those sections (or restart Stage 2), then retry")
+    legal_name, _ = pipeline.company_names(job_id, company_name)
+    docx_bytes = build_report_docx(legal_name, sections, logo_bytes=logo_bytes,
                                    coverage=repo.coverage_summary(job_id))
     object_key = f"reports/{job_id}/draft.docx"
     storage.put_bytes(

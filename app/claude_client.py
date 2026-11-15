@@ -741,6 +741,81 @@ def grade_golden_facts(items: list[tuple[str, str, list[str]]], texts: dict[str,
     return {v.id: {"present": v.present, "evidence": v.evidence} for v in out.verdicts}
 
 
+# --------------------------------------------------------- absence check --
+
+class _AbsenceVerdict(__import__("pydantic").BaseModel):
+    id: str
+    overturned: bool
+    document: str
+    correction: str
+
+
+class _AbsenceVerdicts(__import__("pydantic").BaseModel):
+    verdicts: list[_AbsenceVerdict]
+
+
+class _Rewrite(__import__("pydantic").BaseModel):
+    id: str
+    text: str
+
+
+class _Rewrites(__import__("pydantic").BaseModel):
+    rewrites: list[_Rewrite]
+
+
+def verify_absence_claims(company_name: str, items: list[tuple[str, str, list[str]]]) -> dict[str, dict]:
+    """items: (claim id, claim sentence, candidate fact cards). One reading-
+    model call: is each "missing / unsigned / unconfirmed" claim contradicted
+    by a document that is in the data room?"""
+    parts = []
+    for cid, claim, cards in items:
+        parts.append(f"=== Claim {cid} ===\n{claim}\n--- Candidate documents in the data room ---\n"
+                     + "\n\n".join(cards))
+    response = _create(
+        _client(), "absence_check",
+        model=READ_MODEL,
+        **model_config.no_thinking(READ_MODEL),
+        max_tokens=12000,
+        system=("You check a due diligence report's claims that a document is missing, unsigned, unconfirmed or "
+                "not provided, against the fact cards of documents that ARE in the data room. A claim is "
+                "overturned only if a listed document clearly is the thing claimed missing (or shows it signed / "
+                "confirmed). Be strict: a merely related document does not overturn a claim. Respond with JSON only."),
+        output_config=_output_config(_AbsenceVerdicts, None, READ_MODEL),
+        messages=[{"role": "user", "content": (
+            f"Company: {company_name}. For each claim return: id; overturned (true/false); document (the data-room "
+            f"path that overturns it, or \"\"); correction (one sentence stating what that document actually "
+            f"shows, with its date and signature status, or \"\").\n\n" + "\n\n".join(parts))}],
+    )
+    out = parse_structured_response(response, _AbsenceVerdicts)
+    return {v.id: {"overturned": v.overturned, "document": v.document, "correction": v.correction}
+            for v in out.verdicts}
+
+
+def rewrite_absence_units(company_name: str, units: list[tuple[str, str, list[str], bool]]) -> dict[str, str]:
+    """units: (id, original text, corrections, is_table_row). One drafting-
+    model call rewrites each passage so it states what the documents show,
+    changing nothing else."""
+    parts = []
+    for uid, text, corrections, is_row in units:
+        note = (" (a table row: keep exactly the same number of ' | '-separated cells)" if is_row else "")
+        parts.append(f"=== {uid}{note} ===\nOriginal:\n{text}\nCorrections from the data room:\n"
+                     + "\n".join(f"- {c}" for c in corrections))
+    response = _create(
+        _client(), "absence_rewrite",
+        model=DRAFTING_MODEL,
+        **model_config.no_thinking(DRAFTING_MODEL),
+        max_tokens=16000,
+        system=("You correct passages of a due diligence report that wrongly said a document was missing, "
+                "unsigned or unconfirmed. Rewrite each passage so it accurately reflects the corrections -- naming "
+                "the document, its date and its signature status -- and keep everything else (style, figures, "
+                "other statements, **bold** lead-ins) unchanged. Respond with JSON only."),
+        output_config=_output_config(_Rewrites, None, DRAFTING_MODEL),
+        messages=[{"role": "user", "content": f"Company: {company_name}.\n\n" + "\n\n".join(parts)}],
+    )
+    out = parse_structured_response(response, _Rewrites)
+    return {r.id: r.text for r in out.rewrites}
+
+
 # --------------------------------------------------------- gap/mitigation --
 
 GAP_ANALYSIS_SYSTEM_PROMPT = """\

@@ -4,6 +4,7 @@ process (app/worker.py), never on this request/response cycle.
 """
 import hashlib
 import io
+import json
 import mimetypes
 import uuid
 import zipfile
@@ -584,10 +585,11 @@ def ab_draft(job_id: str, task_key: str, thinking: str = "adaptive"):
         raise HTTPException(status_code=404, detail=f"unknown task {task_key!r}")
     if thinking not in ("adaptive", "disabled"):
         raise HTTPException(status_code=400, detail="thinking must be adaptive or disabled")
-    inputs = pipeline.build_drafting_inputs(job_id, job["company_name"], spec)
+    name = pipeline.company_names(job_id, job["company_name"])[1]
+    inputs = pipeline.build_drafting_inputs(job_id, name, spec)
     with usage.task_context(job_id, None):
         output, response = claude_client.draft_section_raw(
-            spec, job["company_name"], inputs["context"], inputs["user_content"], inputs["target_words"],
+            spec, name, inputs["context"], inputs["user_content"], inputs["target_words"],
             thinking, f"eval:ab:{task_key}:{thinking}")
     stats = usage.cost_of(claude_client.DRAFTING_MODEL, response.usage)
     text = "\n\n".join(f"## {s.section_key}\n" + pipeline.render_blocks_as_text([b.model_dump() for b in s.blocks])
@@ -595,6 +597,18 @@ def ab_draft(job_id: str, task_key: str, thinking: str = "adaptive"):
     return {"task_key": task_key, "thinking": thinking, "stop_reason": response.stop_reason,
             "content_block_types": [b.type for b in response.content], "usage": stats,
             "visible_chars": len(text), "text": text}
+
+
+@app.get("/jobs/{job_id}/absence-log")
+def absence_log(job_id: str):
+    """Every "missing / unsigned / unconfirmed document" claim the absence
+    check found in the draft, and the ones it overturned and corrected."""
+    _require_job(job_id)
+    from app import absence
+    try:
+        return json.loads(storage.get_bytes(absence.log_key(job_id)).decode("utf-8"))
+    except Exception:
+        raise HTTPException(status_code=404, detail="no absence check has run for this job")
 
 
 @app.post("/jobs/{job_id}/golden-eval")
@@ -687,7 +701,8 @@ def get_draft_docx(job_id: str):
     if not sections:
         raise HTTPException(status_code=404, detail="no sections drafted yet")
     logo_bytes = storage.get_bytes(job["logo_key"]) if job["logo_key"] else None
-    docx_bytes = build_report_docx(job["company_name"], sections, logo_bytes, coverage=repo.coverage_summary(job_id))
+    legal_name, _ = pipeline.company_names(job_id, job["company_name"])
+    docx_bytes = build_report_docx(legal_name, sections, logo_bytes, coverage=repo.coverage_summary(job_id))
     return Response(
         content=docx_bytes,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",

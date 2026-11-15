@@ -22,7 +22,8 @@ def run_qa_all(task: dict) -> dict:
     report_text = pipeline.render_full_report_text(job_id)
     reason = "This check was not returned by the QA model."
     try:
-        output = score_all_assessments(specs, payload["company_name"], report_text, evidence.qa_evidence(job_id))
+        name = pipeline.company_names(job_id, payload["company_name"])[1]
+        output = score_all_assessments(specs, name, report_text, evidence.qa_evidence(job_id))
         by_key = {a.task_key: a for a in output.assessments}
     except Exception as exc:
         if not final_attempt:
