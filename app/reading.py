@@ -29,7 +29,7 @@ from app import claude_client, evidence, ingest, repo, storage
 
 log = logging.getLogger("reading")
 
-CARD_VERSION = 1                 # bump when the fact-card prompt/schema changes
+CARD_VERSION = 2                 # bump when the fact-card prompt/schema/model changes (2: Haiku 5.5)
 CHUNK_CHARS = 32_000             # ~9k tokens per chunk of a long document
 CALL_CHARS = 90_000              # text per reading call
 MAX_DOCS_PER_CALL = 12
