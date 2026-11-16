@@ -307,8 +307,12 @@ team. Using web search, gather the public facts the report writers need and \
 write them up as a dense research memo section. The report writers cannot \
 search, so anything you do not record here will be missing from the report.
 
-Be specific and current: names, dates, amounts, product details, regulatory \
-status, prices. Prefer primary and reputable sources (company sites, SEC \
+Search the web before you write: every fact in your section must come from \
+a search result in this conversation, never from memory, and must carry that \
+result's source. Spend your searches on the facts that matter most (current \
+status, funding, deal values, clearances, prices). Be specific and current: \
+names, dates, amounts, product details, regulatory status, prices. Prefer \
+primary and reputable sources (company sites, SEC \
 filings, FDA databases, press releases, peer-reviewed or analyst reports). \
 After every fact give its source in brackets: [publisher, date, URL].
 
@@ -411,8 +415,9 @@ def _research_call(company_name: str, context: str, industry: str, heading: str,
         topic=heading.format(company=company_name), seeds=seeds, context=context)}]
     params = dict(model=model, max_tokens=10000, system=RESEARCH_SYSTEM_PROMPT, tools=[_search_tool(model)],
                   **model_config.no_thinking(model))
-    if _supports_effort(model):
-        params["output_config"] = {"effort": "low"}
+    # No low effort here: at low effort the model answered from memory and
+    # ran no searches at all (checkpoint 2) -- unsourced public facts are
+    # worse than none in a diligence report.
     content = []
     for _ in range(3):  # a server-side search loop can pause; continue it
         response = _create(client, "research", messages=messages, **params)
@@ -442,7 +447,8 @@ def research_market(company_name: str, context: str) -> dict:
 
     industries = industry_config.detect(context)
     industry = industries[0]["label"] if industries else ""
-    company_key = _re.sub(r"[^a-z0-9]+", "", company_name.lower())
+    # v2: entries from before research was required to search are ignored.
+    company_key = _re.sub(r"[^a-z0-9]+", "", company_name.lower()) + ":v2"
 
     def run(heading: str, which: str | None) -> tuple[str, list[dict]]:
         seeds = _seed_text(industries, which)
@@ -479,7 +485,8 @@ def research_market(company_name: str, context: str) -> dict:
         memo = "\n\n".join(text for text, _ in parts if text)
         srcs = [s for _, ss in parts for s in ss]
         sections[topic] = (memo, srcs)
-        if memo and "research for this part failed" not in memo:
+        # Only research that actually cited web sources is worth reusing.
+        if memo and srcs and "research for this part failed" not in memo:
             repo.put_research_cache(company_key, topic, memo, srcs)
     memo = "\n\n".join(sections[t][0] for t, _ in RESEARCH_TOPICS if sections[t][0])
     if not memo.strip():
