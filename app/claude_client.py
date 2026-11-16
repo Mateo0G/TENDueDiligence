@@ -40,9 +40,12 @@ RESEARCH_MODEL = model_config.RESEARCH_MODEL
 READ_MODEL = model_config.READ_MODEL
 DRAFTING_EFFORT = os.environ.get("DRAFTING_EFFORT", "medium")
 # Sonnet 5 runs adaptive thinking by default; its hidden reasoning was about
-# half of all drafting output tokens. "adaptive" keeps it, "disabled" turns
-# it off (see the A/B endpoint, POST /jobs/{id}/ab-draft).
-DRAFTING_THINKING = os.environ.get("DRAFTING_THINKING", "adaptive")
+# half of all drafting output tokens. A/B on the CARI room (financial_1,
+# corp_legal, competition_1): with it off, output tokens fell 50-60% at the
+# same visible length and equal-or-better golden facts (11 vs 9, 11 vs 10,
+# 3 vs 3) -- so off by default. DRAFTING_THINKING=adaptive turns it back on;
+# POST /jobs/{id}/ab-draft compares the two on any job.
+DRAFTING_THINKING = os.environ.get("DRAFTING_THINKING", "disabled")
 
 # 5-minute TTL: every drafting call that reads the prefix refreshes it, and
 # the wave runs back to back, so it never lapses in practice -- the 1-hour
