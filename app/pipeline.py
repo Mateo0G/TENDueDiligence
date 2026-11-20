@@ -12,7 +12,7 @@ it -- see app/evidence.py for what each drafting call sees.
 import logging
 import re
 
-from app import evidence, repo
+from app import evidence, repo, rosters
 from app.reference_report import reference_words, style_excerpt
 from app.sections_spec import (
     INTRO,
@@ -388,6 +388,9 @@ def build_user_content(job_id: str, company_name: str, spec: SectionSpec) -> str
     if siblings:
         lines += ["", "Other parts of this same report are being written separately -- do not repeat their "
                       "content (refer to them by name if useful):"] + [f"- {s}" for s in siblings]
+    roster = rosters.render((repo.get_job(job_id) or {}).get("rosters"), spec.report)
+    if roster:
+        lines += ["", roster]
     if spec.report in _REQUIRED_FACT_REPORTS:
         lines += ["", "This part MUST state, with the exact figures, the relevant 'Required facts computed from the "
                       "source spreadsheets' in the evidence above: " + _REQUIRED_FACT_REPORTS[spec.report] + "."]

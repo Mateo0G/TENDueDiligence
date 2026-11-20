@@ -9,18 +9,23 @@ tenth of the input price. Never blocks drafting: if the warm-up call
 fails, drafting still works (the first calls just write the cache
 themselves).
 """
-from app import claude_client, evidence, repo
+from app import claude_client, evidence, repo, rosters
 from app.tasks.registry import register
 
 
 @register("warm_cache")
 def run_warm_cache(task: dict) -> dict:
     job_id = task["payload"]["job_id"]
+    # Rosters need the research memo (competitors) -- both are done by now.
+    try:
+        roster_counts = rosters.compute_and_store(job_id)
+    except Exception as exc:
+        roster_counts = {"error": str(exc)[:300]}
     context = evidence.store_drafting_context(job_id)
     try:
         claude_client.warm_drafting_cache(context)
     except Exception as exc:
         if task["attempts"] + 1 < repo.MAX_TASK_ATTEMPTS:
             raise
-        return {"context_chars": len(context), "warmed": False, "error": str(exc)[:300]}
-    return {"context_chars": len(context), "warmed": True}
+        return {"context_chars": len(context), "warmed": False, "error": str(exc)[:300], "rosters": roster_counts}
+    return {"context_chars": len(context), "warmed": True, "rosters": roster_counts}

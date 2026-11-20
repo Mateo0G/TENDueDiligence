@@ -170,6 +170,36 @@ class ReadOutput(BaseModel):
     documents: list[CompactDigest]
 
 
+class CardPerson(BaseModel):
+    name: str
+    role: str = Field(description="Role / relationship to the company as this document states it, with dates")
+    prior_employers: list[str] = Field(description="Past employers named in this document (bios, resumes, letters)")
+    equity: str = Field(description='Shares/options/warrants with strike and vesting, as stated; "" if none')
+    comp: str = Field(description='Salary, fees or other compensation, as stated; "" if none')
+
+
+class CardAgreement(BaseModel):
+    counterparty: str
+    type: str = Field(description='e.g. "consulting agreement", "supply PO", "license", "advisory agreement"')
+    date: str
+    fee: str = Field(description='Fees / economics as stated (amount, rate, equity); "" if none')
+    executed: Literal["true", "false", "unclear"]
+
+
+class CardMetric(BaseModel):
+    metric: str = Field(description='e.g. "recovery", "CV", "LoD", "correlation r", "sensitivity"')
+    value: str = Field(description="The value with units, by level if given")
+    matrix: str = Field(description='Specimen / matrix, e.g. "whole blood", "plasma"; "" if not stated')
+    n: str = Field(description='Sample size / replicates as stated; "" if not stated')
+
+
+class CardIPEvent(BaseModel):
+    number: str = Field(description="Application / patent / PCT number")
+    event: str = Field(description='e.g. "filed", "assignment executed", "assignment recorded", "published"')
+    date: str
+    reel_frame: str = Field(description='USPTO reel/frame if given, else ""')
+
+
 class FactCard(BaseModel):
     """One document's (or one chunk's) fact card from the reading model.
     doc_id and file_name are filled in by the app, not the model. Every list
@@ -192,7 +222,10 @@ class FactCard(BaseModel):
     dates_and_deadlines: list[str]
     ip_items: list[str] = Field(description="Patents/applications (numbers, filing dates), assignments and their "
                                             "recordation, licenses, invention-assignment terms")
-    people_mentioned: list[str] = Field(description="Name -- role/relationship (e.g. investigator, advisor, director)")
+    people: list[CardPerson] = Field(description="Every person named, with role, prior employers, equity, comp")
+    agreements: list[CardAgreement] = Field(description="Every agreement, engagement or order this document evidences")
+    performance_metrics: list[CardMetric] = Field(description="Analytical / clinical performance figures")
+    ip_events: list[CardIPEvent] = Field(description="Patent filings, assignments, recordations, publications")
     page_refs: list[str] = Field(description='Pointers to the most important pages, e.g. "p. 4: capitalization table"')
     report_tags: list[EvidenceTag] = Field(description="Every report this document is evidence for -- usually 1-4")
     importance: int = Field(description="1-5: how central this document is to an investor's diligence")

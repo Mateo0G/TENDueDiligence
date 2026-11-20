@@ -131,9 +131,10 @@ marks (DocuSign/Carta envelope IDs, "/s/") or the text says it was signed; \
 "false" for drafts, forms and unsigned copies; "unclear" otherwise.
 - Describe products and technology exactly as the document does (do not call \
 a whole-blood test a fingerstick test unless the document does).
-- Record people and their roles in people_mentioned -- investigators, \
-advisors, directors, noteholders, consultants -- so conflicts of interest \
-can be found across documents.
+- people: every person named, with role as this document states it (and dates -- e.g. "advisory board member until Dec 2025", never upgrade an advisor to a director), prior employers from bios/resumes, equity (shares, options, strike, vesting) and compensation as stated -- so conflicts of interest and competitor backgrounds can be found across documents.
+- agreements: every agreement, engagement, order or letter this document evidences: counterparty, type, date, fee/economics, executed.
+- performance_metrics: analytical/clinical figures (recovery %, CV by level, LoD, correlation, sensitivity) with matrix (whole blood, plasma...) and n.
+- ip_events: every patent/application number with each event (filed, assignment executed, assignment recorded, published), date and reel/frame.
 
 Importance (1-5) and depth:
 5 = core: financing documents (term sheets, notes, SAFEs, warrants, \

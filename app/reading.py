@@ -29,7 +29,7 @@ from app import claude_client, evidence, ingest, repo, storage
 
 log = logging.getLogger("reading")
 
-CARD_VERSION = 2                 # bump when the fact-card prompt/schema/model changes (2: Haiku 5.5)
+CARD_VERSION = 3                 # bump when the fact-card prompt/schema/model changes (3: typed rosters)
 CHUNK_CHARS = 32_000             # ~9k tokens per chunk of a long document
 CALL_CHARS = 90_000              # text per reading call
 MAX_DOCS_PER_CALL = 12
@@ -170,8 +170,11 @@ def _merge(cards: list) -> dict:
     for c in cards[1:]:
         d = c.model_dump()
         for k in ("parties", "signatories", "key_terms", "key_numbers", "dates_and_deadlines", "ip_items",
-                  "people_mentioned", "page_refs", "report_tags", "issues"):
+                  "page_refs", "report_tags", "issues"):
             merged[k] = list(dict.fromkeys(merged[k] + d[k]))
+        for k in ("people", "agreements", "performance_metrics", "ip_events"):
+            have = {json.dumps(x, sort_keys=True) for x in merged[k]}
+            merged[k] += [x for x in d[k] if json.dumps(x, sort_keys=True) not in have]
         for k in ("doc_type", "title", "date"):
             merged[k] = merged[k] or d[k]
         merged["importance"] = max(merged["importance"], d["importance"])
@@ -208,7 +211,12 @@ def card_to_digest(card: dict, f: dict, meta: dict) -> dict:
         "importance": max(1, min(5, int(card["importance"]))),
         "summary": card["summary"],
         "key_facts": [{"fact": x, "location": ""} for x in facts],
-        "people_mentioned": card["people_mentioned"],
+        "people_mentioned": card.get("people_mentioned") or [
+            f"{p['name']} -- {p['role']}" for p in card.get("people") or []],
+        "people": card.get("people") or [],
+        "agreements": card.get("agreements") or [],
+        "performance_metrics": card.get("performance_metrics") or [],
+        "ip_events": card.get("ip_events") or [],
         "page_refs": card["page_refs"],
         "issues": card["issues"],
         "fact_card": card,
