@@ -476,6 +476,13 @@ def start_stage2(job_id: str):
     job = _require_job(job_id)
     if repo.stage_already_started(job_id, pipeline.STAGE_DRAFTING):
         raise HTTPException(status_code=409, detail="Stage 2 has already been started for this job")
+    if not repo.list_dataroom_files(job_id):
+        raise HTTPException(status_code=409, detail="Upload the data room before starting Stage 2")
+    reading = [t for t in repo.list_tasks_for_job(job_id)
+               if t["stage"] == pipeline.STAGE_INTAKE and t["status"] in ("pending", "running")]
+    if reading:
+        raise HTTPException(status_code=409, detail=(
+            "Documents are still being read; Stage 2 can start once reading has finished"))
     task_ids = pipeline.create_stage2_tasks(job_id, job["company_name"])
     return Stage2Result(task_ids=task_ids)
 
@@ -698,6 +705,18 @@ def start_stage3(job_id: str):
     job = _require_job(job_id)
     if repo.stage_already_started(job_id, pipeline.STAGE_COMPILE):
         raise HTTPException(status_code=409, detail="Stage 3 has already been started for this job")
+    stage2 = [t for t in repo.list_tasks_for_job(job_id) if t["stage"] == pipeline.STAGE_DRAFTING]
+    if not stage2:
+        raise HTTPException(status_code=409, detail="Run Stage 2 before Stage 3")
+    done = sum(t["status"] == "completed" for t in stage2)
+    failed = sum(t["status"] == "failed" for t in stage2)
+    if failed:
+        raise HTTPException(status_code=409, detail=(
+            f"{failed} Stage 2 step(s) failed; retry them (or restart Stage 2) before compiling"))
+    if done < len(stage2):
+        raise HTTPException(status_code=409, detail=(
+            f"Stage 2 is still running ({done} of {len(stage2)} steps done); "
+            "Stage 3 can start once every step has finished"))
     task_id = pipeline.create_stage3_task(job_id, job["company_name"])
     return Stage3Result(task_id=task_id)
 
