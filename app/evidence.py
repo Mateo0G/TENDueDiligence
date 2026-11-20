@@ -426,23 +426,138 @@ def _page_index(job_id):
     return index
 
 
-def retrieve_pages(job_id, query: str, budget: int = RETRIEVAL_CHARS) -> str:
+MAX_PAGES_PER_FILE = 2
+
+
+def retrieve_pages(job_id, queries: list[str], budget: int = RETRIEVAL_CHARS, exclude: set | None = None) -> str:
+    """Top-matching page chunks for each query (one per subsection being
+    written), sharing the budget, at most MAX_PAGES_PER_FILE pages from any
+    one file so a single long document can't crowd out the rest. `exclude`:
+    file paths already given verbatim (must-include)."""
     try:
         bm25, chunks = _page_index(job_id)
     except Exception:
         return ""
-    if bm25 is None:
+    if bm25 is None or not queries:
         return ""
-    scores = bm25.get_scores(_tokens(query))
-    order = sorted(range(len(chunks)), key=lambda i: -scores[i])
-    out, used, seen = [], 0, set()
-    for i in order[:60]:
-        c = chunks[i]
-        if scores[i] <= 0 or (c["path"], c["page"]) in seen:
-            continue
-        if used + len(c["text"]) > budget:
-            continue
-        seen.add((c["path"], c["page"]))
-        out.append(f"--- {c['path']}, page {c['page']}{(' (' + c['label'] + ')') if c['label'] else ''} ---\n{c['text']}")
-        used += len(c["text"])
+    per_query = budget // len(queries)
+    out, used, seen, per_file = [], 0, set(), {}
+    for q in queries:
+        scores = bm25.get_scores(_tokens(q))
+        q_used = 0
+        for i in sorted(range(len(chunks)), key=lambda i: -scores[i])[:40]:
+            c = chunks[i]
+            if scores[i] <= 0 or (c["path"], c["page"]) in seen or per_file.get(c["path"], 0) >= MAX_PAGES_PER_FILE:
+                continue
+            if exclude and c["path"] in exclude:
+                continue
+            if q_used + len(c["text"]) > per_query or used + len(c["text"]) > budget:
+                continue
+            seen.add((c["path"], c["page"]))
+            per_file[c["path"]] = per_file.get(c["path"], 0) + 1
+            out.append(f"--- {c['path']}, page {c['page']}{(' (' + c['label'] + ')') if c['label'] else ''} ---\n"
+                       f"{c['text']}")
+            q_used += len(c["text"])
+            used += len(c["text"])
     return "\n\n".join(out)
+
+
+# --------------------------------------------------------- must-include --
+# config/section_must_include.yaml: the documents and clauses each report
+# must always receive verbatim (the anti-dilution article, the latest bank
+# statements, the board minutes, the offer letters, ...), placed BEFORE the
+# BM25 retrieval fills the rest -- the Nov 15 legal section fell back on
+# "typical" anti-dilution terms because the clause never reached it.
+
+MUST_INCLUDE_PATH = "config/section_must_include.yaml"
+_HEADING = re.compile(r"(?m)^\s*(ARTICLE\b|Article\b|Section \d|SECTION \d|\d{1,2}\.\s+[A-Z]|[A-Z][A-Z &,\-]{8,}$)")
+
+
+def _must_include_config() -> dict:
+    import yaml
+    try:
+        with open(MUST_INCLUDE_PATH, encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+    except FileNotFoundError:
+        return {}
+
+
+def _current_files(job_id) -> list[dict]:
+    files, _ = unique_files(job_id)
+    return [f for f in files if not (f.get("digest") or {}).get("superseded_by")]
+
+
+def _matches(f: dict, pattern: str) -> bool:
+    d = f.get("digest") or {}
+    hay = f"{f.get('source_path') or ''} {f['original_filename']} {d.get('title', '')} {d.get('document_type', '')}"
+    return re.search(pattern, hay, re.I) is not None
+
+
+_AUTHORITATIVE = re.compile(r"certified|executed|filed|signed|final", re.I)
+_PROVISIONAL = re.compile(r"redline|draft|form of|template|unsigned", re.I)
+
+
+def _newest_first(files: list[dict]) -> list[dict]:
+    """Current, executed/certified versions first (redlines and drafts
+    last), then newest by year."""
+    def key(f):
+        d = f.get("digest") or {}
+        name = f"{f.get('source_path') or ''} {f['original_filename']}"
+        m = re.findall(r"(?:19|20)\d{2}", f"{d.get('document_date', '')} {f['original_filename']}")
+        return (0 if _PROVISIONAL.search(name) else 1, 1 if d.get("is_current") else 0,
+                1 if _AUTHORITATIVE.search(name) or d.get("execution_status") == "executed" else 0,
+                max(m) if m else "0000", f["original_filename"])
+    return sorted(files, key=key, reverse=True)
+
+
+def _clause(text: str, anchor: str, max_chars: int) -> str:
+    """The clause containing `anchor`: from the heading before it to the
+    next heading, capped."""
+    m = re.search(anchor, text, re.I)
+    if not m:
+        return ""
+    heads = [h.start() for h in _HEADING.finditer(text)]
+    start = max([h for h in heads if h <= m.start()] or [max(0, m.start() - 300)])
+    if m.start() - start > max_chars // 2:
+        start = max(0, m.start() - 300)
+    nxt = [h for h in heads if h > m.end() + 200]
+    end = min(nxt[0] if nxt else len(text), start + max_chars)
+    return text[start:end].strip()
+
+
+def must_include(job_id, report_key: str) -> tuple[str, int]:
+    """Verbatim required material for one report and its size in chars."""
+    cfg = _must_include_config().get(report_key) or {}
+    if not cfg:
+        return "", 0
+    budget = int(cfg.get("budget", 20_000))
+    files = _current_files(job_id)
+    parts, used, seen = [], 0, set()
+
+    def add(label: str, text: str) -> None:
+        nonlocal used
+        text = text.strip()
+        if not text or used >= budget:
+            return
+        text = text[: budget - used]
+        parts.append(f"--- {label} ---\n{text}")
+        used += len(text)
+
+    for rule in cfg.get("clauses") or []:
+        docs = _newest_first([f for f in files if _matches(f, rule["document"])])
+        for anchor in rule.get("anchors") or []:
+            for f in docs:
+                clause = _clause(file_text(f), anchor, int(rule.get("max_chars", 3000)))
+                if clause and (f["id"], clause[:80]) not in seen:
+                    seen.add((f["id"], clause[:80]))
+                    add(f"{_label(f)} -- clause matching '{anchor}' (verbatim)", clause)
+                    break
+    for rule in cfg.get("documents") or []:
+        docs = _newest_first([f for f in files if _matches(f, rule["match"]) and f["id"] not in seen])
+        for f in docs[: int(rule.get("max_docs", 2))]:
+            seen.add(f["id"])
+            text = file_text(f)
+            if extract.is_placeholder(text):
+                continue
+            add(f"{_label(f)} (verbatim excerpt)", text[: int(rule.get("max_chars", 2500))])
+    return "\n\n".join(parts), used

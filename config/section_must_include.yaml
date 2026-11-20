@@ -1,0 +1,115 @@
+# What each report must always receive verbatim, before BM25 page retrieval
+# fills the rest of its budget (app/evidence.py: must_include). Keys are
+# report keys from app/sections_spec.py.
+#
+# documents: `match` is a case-insensitive regex tested against each current
+#   (non-superseded) file's path, title and document type; the newest
+#   `max_docs` matches contribute up to `max_chars` each.
+# clauses: in files matching `document`, the text around each `anchors`
+#   regex (from the anchor's heading to the next heading, up to `max_chars`)
+#   -- the clause, not the whole 75-page document.
+# budget: the most characters must-include material may add to one call.
+
+corp_legal:
+  budget: 26000
+  clauses:
+    - document: 'certificate of incorporation|restated certificate|certified copy|charter'
+      anchors: ['anti-?dilution', 'protective provisions', 'redemption', 'adjustment(s)? (of|to) (the )?conversion price']
+      max_chars: 3500
+  documents:
+    - match: "investors.? rights"
+      max_docs: 1
+      max_chars: 3000
+    - match: 'board (meeting )?minutes|bod meeting'
+      max_docs: 3
+      max_chars: 3000
+    - match: 'side letter'
+      max_docs: 2
+      max_chars: 2000
+    - match: 'form of (series 2025a )?(warrant|convertible note)'
+      max_docs: 2
+      max_chars: 2500
+
+contracts:
+  budget: 12000
+  clauses:
+    - document: 'certificate of incorporation|restated certificate|certified copy|charter'
+      anchors: ['anti-?dilution']
+      max_chars: 3000
+  documents:
+    - match: "investors.? rights|side letter"
+      max_docs: 2
+      max_chars: 2500
+
+financial:
+  budget: 22000
+  documents:
+    - match: 'bank statement|statements?/'
+      max_docs: 3
+      max_chars: 2000
+    - match: 'p ?& ?l|profit|income statement'
+      max_docs: 1
+      max_chars: 4000
+    - match: 'balance sheet'
+      max_docs: 1
+      max_chars: 3000
+    - match: '13-month|cash forecast'
+      max_docs: 1
+      max_chars: 3000
+    - match: 'notice of (grant )?award|\bnoa\b'
+      max_docs: 3
+      max_chars: 1500
+    - match: 'board (meeting )?minutes|bod meeting'
+      max_docs: 3
+      max_chars: 2500
+
+hr:
+  budget: 20000
+  documents:
+    - match: 'offer letter|salary adjustment'
+      max_docs: 6
+      max_chars: 1800
+    - match: 'compensation'
+      max_docs: 1
+      max_chars: 3000
+    - match: 'option grant'
+      max_docs: 3
+      max_chars: 1500
+    - match: 'ciiaa|invention assignment|inventions assignment'
+      max_docs: 3
+      max_chars: 1500
+    - match: 'advisory agreement|consulting agreement'
+      max_docs: 4
+      max_chars: 1200
+
+ip:
+  budget: 16000
+  documents:
+    - match: 'filing receipt|uspto|patent center'
+      max_docs: 3
+      max_chars: 2500
+    - match: 'assignment'
+      max_docs: 4
+      max_chars: 2000
+    - match: 'patent landscape|landscape (review|memo|search|analysis)|freedom.to.operate|\bfto\b'
+      max_docs: 1
+      max_chars: 3000
+
+commercial:
+  budget: 18000
+  documents:
+    - match: 'market.sizing'
+      max_docs: 1
+      max_chars: 4000
+    - match: 'survey'
+      max_docs: 1
+      max_chars: 3000
+    - match: 'dropout|revenue.loss|retention'
+      max_docs: 1
+      max_chars: 3000
+    - match: '\blos\b|\bloi\b|\bmou\b|letter of (support|intent)'
+      max_docs: 4
+      max_chars: 1200
+    - match: 'jama|census|use estimates|strategic plan'
+      max_docs: 2
+      max_chars: 1500

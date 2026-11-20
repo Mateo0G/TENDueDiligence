@@ -9,6 +9,7 @@ while the user is still uploading the pitch deck and logo. Stage 2 then
 builds the Key Facts sheet from every digest and drafts the report against
 it -- see app/evidence.py for what each drafting call sees.
 """
+import logging
 import re
 
 from app import evidence, repo
@@ -22,6 +23,8 @@ from app.sections_spec import (
     section_defs,
     section_key,
 )
+
+log = logging.getLogger("pipeline")
 
 STAGE_INTAKE = 1
 STAGE_DRAFTING = 2
@@ -397,9 +400,17 @@ def build_user_content(job_id: str, company_name: str, spec: SectionSpec) -> str
     if excerpts:
         lines += ["", "### Primary-source text (for exact figures; the evidence pack has the digests)", excerpts]
     if not spec.summary_context:
-        query = " ".join([title] + [f"{report.sub(s).title} {report.sub(s).guidance}" for s in spec.subs])
-        query = query.format(company=company_name) if "{company}" in query else query
-        pages = evidence.retrieve_pages(job_id, query)
+        # Required documents and clauses first (config/section_must_include.yaml),
+        # then BM25 fills the rest, one query per subsection.
+        required, used = evidence.must_include(job_id, spec.report)
+        if required:
+            lines += ["", "### Required source documents and clauses for this report (verbatim; base exact terms, "
+                          "figures and dates on these)", required]
+            log.info("must-include %s/%s: %s chars", spec.report, spec.task_key, used)
+        queries = [f"{title} {report.sub(s).title} {report.sub(s).guidance}".replace("{company}", company_name)
+                   for s in spec.subs]
+        exclude = set(re.findall(r"(?m)^--- (.+?) (?:--|\()", required)) if required else None
+        pages = evidence.retrieve_pages(job_id, queries, max(10_000, evidence.RETRIEVAL_CHARS - used // 2), exclude)
         if pages:
             lines += ["", "### Verbatim data-room pages most relevant to this part (from a search over every page; "
                           "use them for exact terms, figures and dates)", pages]
