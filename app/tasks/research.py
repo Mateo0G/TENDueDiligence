@@ -23,4 +23,6 @@ def run_research(task: dict) -> dict:
         repo.set_job_research(job_id, {"error": str(exc)[:500]})
         return {"fallback": True}
     repo.set_job_research(job_id, result)
-    return {"memo_chars": len(result["memo"]), "sources": len(result["sources"])}
+    return {"memo_chars": len(result["memo"]), "sources": len(result["sources"]),
+            "searches": result.get("searches"), "search_errors": result.get("search_errors"),
+            "from_cache": result.get("from_cache")}

@@ -1,0 +1,65 @@
+# Seed lists for web research, by industry: the competitors, acquirers and
+# comparable exits the Team expects a report in that space to cover.
+# Research starts from these plus every company the data room names, then
+# verifies and extends them. An industry applies when at least `min_hits`
+# of its keywords appear in the company's own materials.
+# Edit freely -- loaded by app/industry_config.py at runtime.
+
+poc_diagnostics_tdm:
+  label: point-of-care diagnostics / therapeutic drug monitoring
+  min_hits: 3
+  keywords: [point-of-care, point of care, diagnostic, assay, immunoassay, methadone, therapeutic drug monitoring,
+             tdm, toxicology, eddp, opioid, cassette, reader, clia, 510(k), whole blood, lateral flow]
+  competitors:
+    - ARK Diagnostics (ARCHIMED)
+    - ProciseDx (Biosynex)
+    - SpinChip (bioMerieux)
+    - Abbott (Alere)
+    - Lin-Zhi International (LZI)
+    - Aegis Sciences
+    - Millennium Health
+    - ARUP Laboratories
+    - Thermo Fisher Scientific (CEDIA/DRI)
+    - Roche Diagnostics
+    - QuidelOrtho
+    - Siemens Healthineers
+  acquirers:
+    - Thermo Fisher Scientific
+    - Roche
+    - Abbott
+    - QuidelOrtho
+    - bioMerieux
+    - ARCHIMED
+    - Siemens Healthineers
+    - Indivior
+    - Danaher (Cepheid/Beckman Coulter)
+    - Bio-Rad
+    - LabCorp
+    - Quest Diagnostics
+  exits:
+    - Epocal acquired by Alere
+    - LumiraDx assets acquired by Roche
+    - SpinChip acquired by bioMerieux
+    - ARK Diagnostics acquired by ARCHIMED
+    - Opiant Pharmaceuticals acquired by Indivior
+    - Assurex Health acquired by Myriad Genetics
+    - Ambry Genetics acquired by Konica Minolta
+    - Akoya Biosciences acquired by Quanterix
+    - LEX Diagnostics acquired by Roche
+
+medical_devices:
+  label: medical devices
+  min_hits: 3
+  keywords: [medical device, fda, 510(k), de novo, pma, implant, catheter, surgical, iso 13485, class ii]
+  competitors: []
+  acquirers: [Medtronic, Boston Scientific, Stryker, Johnson & Johnson MedTech, Abbott, BD, Edwards Lifesciences,
+              Zimmer Biomet, Baxter]
+  exits: []
+
+organ_transplant:
+  label: organ preservation / transplant
+  min_hits: 3
+  keywords: [organ, transplant, perfusion, preservation, donor, biobank, tissue bank]
+  competitors: [TransMedics, XVIVO Perfusion, OrganOx, Paragonix Technologies, Bridge to Life, Organ Recovery Systems]
+  acquirers: [TransMedics, XVIVO, Getinge, Terumo, Medtronic, Baxter]
+  exits: []

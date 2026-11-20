@@ -311,6 +311,26 @@ def source_excerpts(job_id, tags: tuple[str, ...], budget: int) -> str:
     return "\n\n".join(parts)
 
 
+_ENTITY_NAME = re.compile(r"\b(inc|llc|l\.l\.c|corp|corporation|ltd|limited|gmbh|plc|lp|l\.p|co|company|"
+                          r"laboratories|labs|health|diagnostics|sciences|therapeutics|bio\w*)\.?$", re.I)
+
+
+def named_companies(files: list[dict], limit: int = 60) -> list[str]:
+    """Organizations the data room names (fact-card parties and the
+    employers on people's records), most often first."""
+    counts: dict[str, int] = {}
+    for f in files:
+        d = f.get("digest") or {}
+        names = list(d.get("parties") or [])
+        for p in (d.get("fact_card") or {}).get("people") or []:
+            names += list(p.get("prior_employers") or []) if isinstance(p, dict) else []
+        for n in names:
+            n = " ".join(str(n).split())
+            if 2 < len(n) < 80 and _ENTITY_NAME.search(n):
+                counts[n] = counts.get(n, 0) + 1
+    return sorted(counts, key=lambda n: -counts[n])[:limit]
+
+
 def research_context(job_id) -> str:
     """What the web-research call needs to know about the company: the deck
     and the summaries of the documents that describe the product, market
@@ -318,6 +338,10 @@ def research_context(job_id) -> str:
     files, _ = unique_files(job_id)
     decks = [f for f in files if f["file_kind"] == "pitch_deck"]
     parts = []
+    named = named_companies(files)
+    if named:
+        parts.append("## Companies named in the data room (counterparties, investors, employers, competitors)\n"
+                     + "; ".join(named))
     if decks:
         deck = file_text(decks[0])
         if not extract.is_placeholder(deck):

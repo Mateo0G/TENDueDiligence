@@ -15,6 +15,7 @@ Cost model (see also app/usage.py, which records every call's real cost):
 - Stage 4's ~22 checks are one call.
 """
 import json
+import logging
 import os
 
 import anthropic
@@ -30,6 +31,8 @@ from app.models import (
     QAScoreOutput,
 )
 from app.qa_spec import QASpec
+
+log = logging.getLogger("claude_client")
 
 # Model IDs and prices: app/model_config.py (one place, env-overridable).
 DRAFTING_MODEL = model_config.DRAFTING_MODEL
@@ -303,145 +306,181 @@ def extract_key_facts(company_name: str, pack_text: str) -> KeyFactsOutput:
 
 
 # --------------------------------------------------------------- research --
+#
+# Two steps per topic:
+# 1. GATHER (reading model + web search, plain "direct" searches, a few per
+#    call): returns short evidence notes. Every web_search_tool_result error
+#    (invalid_tool_input, max_uses_exceeded, too_many_requests, ...) comes
+#    back as content, not an exception -- each one is logged and counted.
+# 2. WRITE (drafting model, no tools): the memo section for the topic from
+#    the stripped evidence (notes + cited title / URL / snippet), the seed
+#    candidates and the companies the data room names. If the searches for
+#    a topic failed, candidates are profiled from the data room and general
+#    knowledge and each such fact is marked "(unverified)" -- a table is
+#    never left empty.
+#
+# Why: web_search_20260209 defaults to dynamic filtering, i.e. searches run
+# inside an auto-provisioned code-execution sandbox; with a 3-search limit,
+# over-limit runs ended in code-execution errors that were silently dropped,
+# and the model wrote "the tool failed" into the memo (3 searches in 7 calls
+# on the Nov 15 run). allowed_callers=["direct"] turns that off.
 
-RESEARCH_SYSTEM_PROMPT = """\
+RESEARCH_GATHER_SYSTEM = """\
+You gather public facts for a venture due diligence team using the web_search \
+tool. Search first; never answer from memory. Keep every query short -- under \
+10 words, one company or one fact per query. After searching, output NOTES \
+only: one line per fact, exact figures and dates, each ending with its source \
+as [publisher, date, URL]. No analysis, no headings, no commentary about the \
+search process.
+"""
+
+RESEARCH_WRITE_SYSTEM = """\
 You are the market-research analyst on TEN Capital Network's due diligence \
-team. Using web search, gather the public facts the report writers need and \
-write them up as a dense research memo section. The report writers cannot \
-search, so anything you do not record here will be missing from the report.
-
-Search the web before you write: every fact in your section must come from \
-a search result in this conversation, never from memory, and must carry that \
-result's source. Spend your searches on the facts that matter most (current \
-status, funding, deal values, clearances, prices). Be specific and current: \
-names, dates, amounts, product details, regulatory status, prices. Prefer \
-primary and reputable sources (company sites, SEC \
-filings, FDA databases, press releases, peer-reviewed or analyst reports). \
-After every fact give its source in brackets: [publisher, date, URL].
-
-If something cannot be established, add it to a final "Follow-up items" \
-list as a specific action (e.g. "Confirm ProciseDx's FDA clearance status \
-for its phenytoin assay with the company"). Never mention searches, search \
-tools, limits or caps -- the reader only needs facts and follow-ups.
+team, writing one section of the research memo the report writers will use \
+(they cannot search). Use the search evidence provided; keep every figure \
+and its source [publisher, date, URL]. Where the evidence does not cover a \
+candidate or fact that matters, use the data-room context and your general \
+knowledge and mark each such fact "(unverified)". Never leave a list or \
+table empty and never write "not established" -- give the best-supported \
+figure or range, marked unverified if it is. Never mention searches, search \
+tools, limits or failures. End with a short "Follow-up items" list of \
+specific facts to confirm.
 """
 
-RESEARCH_BRIEF = """\
-Research brief for {company} ({industry}). Write this part of the research \
-memo under exactly these headings:
-
-{topic}
-
-{seeds}
-What the company and its documents say about itself -- cover every \
-competitor, customer and acquirer they name, and verify their claims about \
-competitors and the market independently:
-
-{context}
-"""
-
-# Four topics, each split into sub-calls of at most RESEARCH_SEARCHES_PER_CALL
-# searches: within one call every search step re-reads all earlier results,
-# so cost grows with the square of the searches per call (one call with 8
-# searches measured 629k input tokens, $2.22, ~12 min). Sub-calls run in
-# parallel. Results are cached per company and topic (research_cache).
+# (topic, gather calls [(instruction, seed kind, max searches)], write brief)
 RESEARCH_TOPICS = [
-    ("competitors", [
-        ("""## Competitors (part 1)
-Profile the most important direct competitors of {company}, starting with \
-the candidates listed below that are relevant. For each: name, HQ, founded, \
-ownership / funding / latest valuation, product and how it works \
+    ("competitors",
+     [("Direct competitors of {company} among these candidates: product, technology, specimen, regulatory "
+       "status, funding/ownership, pricing, traction.", "competitors_a", 3),
+      ("More direct and adjacent competitors of {company} among these candidates and any important ones they "
+       "omit: product, regulatory status, funding/ownership, traction.", "competitors_b", 3)],
+     """## Competitors
+Profile 8 to 12 direct and adjacent competitors of {company} -- every relevant \
+seed candidate and every competitor the data room names. For each: name, HQ, \
+founded, ownership / funding / latest valuation, product and how it works \
 (technology, specimen/input, setting, time to result), regulatory status, \
-pricing if public, customers and traction, and how it compares with \
-{company}'s product.""", "first"),
-        ("""## Competitors (part 2)
-Profile further direct and adjacent competitors of {company} -- the \
-remaining relevant candidates below and any important ones they omit -- \
-with the same fields: name, HQ, founded, ownership / funding, product and \
-how it works, regulatory status, pricing, traction, comparison.""", "second"),
-    ]),
-    ("acquirers_deals", [
-        ("""## Potential acquirers
-8 to 12 strategic or sponsor buyers for {company}, starting with the \
-relevant candidates below. For each: rationale (portfolio fit, stated \
-strategy) and its relevant acquisitions with dates and values.""", "acquirers"),
-        ("""## Comparable transactions
-Acquisitions and notable financings in {company}'s space in the last ~7 \
-years: acquirer, target, date, deal value, the target's revenue or stage at \
-the time, multiple if known.""", "acquirers"),
-    ]),
-    ("market", [
-        ("""## Market size and growth
-TAM/SAM figures with year and source, growth rates, demand drivers, and the \
-size of the specific segment {company} sells into (number of sites/patients \
-or tests, if applicable).""", None),
-        ("""## Industry trends and risks
-What an investor in {company} should know: technology, regulatory, \
-reimbursement, competitive and consolidation trends.""", None),
-    ]),
-    ("reimbursement", [
-        ("""## Reimbursement, pricing and regulatory landscape
-Billing codes and payment rates for this kind of product or test, payer \
-coverage, prices of comparable products, precedent clearances/approvals for \
-similar products, and relevant agency guidance.""", None),
-    ]),
+pricing, customers and traction, and how it compares with {company}'s \
+product. Note any competitor where {company}'s team previously worked."""),
+    ("exits",
+     [("Acquisitions of companies comparable to {company} (point-of-care / diagnostics / this space): acquirer, "
+       "target, date, deal value, target revenue or stage.", "exits_a", 3),
+      ("More comparable exits and their values, including these candidates: acquirer, date, value, stage.",
+       "exits_b", 3)],
+     """## Comparable transactions
+At least 7 acquisitions or exits comparable to {company}: acquirer, target, \
+date, deal value, the target's revenue or stage at the time, and the \
+multiple if known -- in a table. Then, for each plausible exit path \
+(strategic acquisition before revenue, after clearance, after commercial \
+traction; licensing; PE), the value range the comparables imply."""),
+    ("acquirers",
+     [("Likely acquirers for {company}: strategy, recent relevant acquisitions with dates and values.",
+       "acquirers", 4)],
+     """## Potential acquirers
+8 to 12 strategic or sponsor buyers for {company}, starting with the relevant \
+seed candidates: for each, the rationale (portfolio fit, stated strategy) \
+and its relevant acquisitions with dates and values."""),
+    ("market",
+     [("Market size and growth for {company}'s market, the specific segment, reimbursement codes and payment "
+       "rates, and relevant regulatory precedents.", None, 3)],
+     """## Market size, reimbursement and trends
+TAM/SAM figures with year and source and growth rates; the size of the \
+specific segment {company} sells into; billing codes, payment rates and \
+coverage; precedent clearances for similar products; and the industry \
+trends and risks an investor should know."""),
 ]
-RESEARCH_SEARCHES_PER_CALL = int(os.environ.get("RESEARCH_SEARCHES_PER_CALL", "3"))
-RESEARCH_CACHE_DAYS = int(os.environ.get("RESEARCH_CACHE_DAYS", "14"))
+RESEARCH_CACHE_DAYS = int(os.environ.get("RESEARCH_CACHE_DAYS", "30"))
+RESEARCH_CONTEXT_CHARS = 14_000
 
 
-def _search_tool(model: str) -> dict:
+def _search_tool(model: str, max_uses: int) -> dict:
     kind = "web_search_20250305" if model.startswith("claude-haiku-4") else "web_search_20260209"
-    return {"type": kind, "name": "web_search", "max_uses": RESEARCH_SEARCHES_PER_CALL}
+    # "direct": plain searches -- not dynamic filtering through a code-execution sandbox.
+    return {"type": kind, "name": "web_search", "max_uses": int(max_uses), "allowed_callers": ["direct"]}
 
 
-def _seed_text(industries: list[dict], which: str | None) -> str:
-    if not industries or which is None:
-        return ""
+def _seeds(industries: list[dict], kind: str | None) -> list[str]:
+    if not industries or not kind:
+        return []
     ind = industries[0]
-    if which == "acquirers":
-        names = ind["acquirers"]
-    else:
-        names = ind["competitors"]
+    if kind.startswith("competitors"):
+        names = list(ind.get("competitors") or [])
         half = (len(names) + 1) // 2
-        names = names[:half] if which == "first" else names[half:]
-    if not names:
-        return ""
-    return ("Candidates the Team expects to see covered in this space (include each one that is relevant, "
-            "and say briefly why any is not): " + "; ".join(names) + "\n")
+        return names[:half] if kind.endswith("_a") else names[half:]
+    if kind.startswith("exits"):
+        names = list(ind.get("exits") or [])
+        return [] if kind.endswith("_a") else names
+    return list(ind.get(kind) or [])
 
 
-def _research_call(company_name: str, context: str, industry: str, heading: str, seeds: str,
-                   model: str) -> tuple[str, list[dict]]:
+def _gather(company_name: str, instruction: str, seeds: list[str], max_uses: int, model: str) -> dict:
+    """One search call. Returns notes, cited evidence, search/error counts."""
     client = _client()
-    messages = [{"role": "user", "content": RESEARCH_BRIEF.format(
-        company=company_name, industry=industry or "industry as described below",
-        topic=heading.format(company=company_name), seeds=seeds, context=context)}]
-    params = dict(model=model, max_tokens=10000, system=RESEARCH_SYSTEM_PROMPT, tools=[_search_tool(model)],
-                  **model_config.no_thinking(model))
-    # No low effort here: at low effort the model answered from memory and
-    # ran no searches at all (checkpoint 2) -- unsourced public facts are
-    # worse than none in a diligence report.
+    text = instruction.format(company=company_name)
+    if seeds:
+        text += "\nCandidates: " + "; ".join(seeds)
+    messages = [{"role": "user", "content": text}]
+    params = dict(model=model, max_tokens=6000, system=RESEARCH_GATHER_SYSTEM,
+                  tools=[_search_tool(model, max_uses)], **model_config.no_thinking(model))
     content = []
-    for _ in range(3):  # a server-side search loop can pause; continue it
+    for _ in range(4):  # a long server-side search turn can pause: send it back unchanged to continue
         response = _create(client, "research", messages=messages, **params)
         content += list(response.content)
         if response.stop_reason != "pause_turn":
             break
         messages = messages + [{"role": "assistant", "content": response.content}]
-    memo, sources = [], []
+    notes, cites, errors, results = [], [], [], 0
     for block in content:
-        if block.type != "text":
-            continue
-        memo.append(block.text)
-        for c in getattr(block, "citations", None) or []:
-            if getattr(c, "url", None):
-                sources.append({"url": c.url, "title": getattr(c, "title", "") or ""})
-    return "".join(memo).strip(), sources
+        if block.type == "web_search_tool_result":
+            c = block.content
+            code = getattr(c, "error_code", None) or (c.get("error_code") if isinstance(c, dict) else None)
+            if code:
+                errors.append(code)
+                log.warning("web search error %s (%s)", code, instruction[:60])
+            else:
+                results += len(c or [])
+        elif block.type == "text":
+            notes.append(block.text)
+            for ci in getattr(block, "citations", None) or []:
+                if getattr(ci, "url", None):
+                    cites.append({"url": ci.url, "title": getattr(ci, "title", "") or "",
+                                  "snippet": (getattr(ci, "cited_text", "") or "")[:300]})
+    searches = sum(1 for b in content if b.type == "server_tool_use")
+    return {"notes": "".join(notes).strip(), "cites": cites, "errors": errors, "results": results,
+            "searches": searches}
+
+
+def _write_section(company_name: str, industry: str, brief: str, gathered: list[dict], seeds: list[str],
+                   context: str) -> str:
+    evidence = []
+    for g in gathered:
+        if g["notes"]:
+            evidence.append(g["notes"])
+        for c in g["cites"]:
+            evidence.append(f"- {c['title']} | {c['url']} | {c['snippet']}")
+    verified = any(g["results"] for g in gathered)
+    prompt = (
+        f"Company: {company_name} ({industry or 'see context'}).\n\nWrite this memo section:\n\n"
+        f"{brief.format(company=company_name)}\n\n"
+        + (f"Seed candidates to cover where relevant: {'; '.join(seeds)}\n\n" if seeds else "")
+        + "### Search evidence (stripped to notes, title, URL and snippet)\n"
+        + ("\n".join(evidence) if evidence else "(no search evidence for this topic -- mark facts unverified)")
+        + f"\n\n### What the data room says (company materials and named companies)\n{context[:RESEARCH_CONTEXT_CHARS]}"
+    )
+    response = _create(
+        _client(), "research_synthesis",
+        model=DRAFTING_MODEL,
+        max_tokens=8000,
+        system=RESEARCH_WRITE_SYSTEM,
+        messages=[{"role": "user", "content": prompt}],
+        **model_config.no_thinking(DRAFTING_MODEL),
+    )
+    text = "".join(b.text for b in response.content if b.type == "text").strip()
+    return text if verified else text + "\n\n(Facts in this section not followed by a source are unverified.)"
 
 
 def research_market(company_name: str, context: str) -> dict:
-    """The research memo: one section per topic, from cache when this
-    company was researched within RESEARCH_CACHE_DAYS."""
+    """The research memo: one section per topic, from the 30-day cache when
+    this company was researched (with sources) recently."""
     import concurrent.futures
     import contextvars
     import re as _re
@@ -450,58 +489,62 @@ def research_market(company_name: str, context: str) -> dict:
 
     industries = industry_config.detect(context)
     industry = industries[0]["label"] if industries else ""
-    # v2: entries from before research was required to search are ignored.
-    company_key = _re.sub(r"[^a-z0-9]+", "", company_name.lower()) + ":v2"
+    # v3: research before direct search + Sonnet write-up is ignored.
+    company_key = _re.sub(r"[^a-z0-9]+", "", company_name.lower()) + ":v3"
 
-    def run(heading: str, which: str | None) -> tuple[str, list[dict]]:
-        seeds = _seed_text(industries, which)
-        try:
-            return _research_call(company_name, context, industry, heading, seeds, RESEARCH_MODEL)
-        except anthropic.BadRequestError:
-            if RESEARCH_MODEL == DRAFTING_MODEL:
-                raise
-            return _research_call(company_name, context, industry, heading, seeds, DRAFTING_MODEL)
-
-    sections: dict[str, tuple[str, list]] = {}
-    jobs = []
-    for topic, calls in RESEARCH_TOPICS:
+    sections, todo = {}, []
+    for topic, calls, brief in RESEARCH_TOPICS:
         cached = repo.get_research_cache(company_key, topic, RESEARCH_CACHE_DAYS)
         if cached:
-            sections[topic] = (cached["memo"], cached["sources"])
+            sections[topic] = {"memo": cached["memo"], "sources": cached["sources"], "cached": True}
         else:
-            jobs += [(topic, n, heading, which) for n, (heading, which) in enumerate(calls)]
-    results: dict[tuple, tuple] = {}
+            todo.append((topic, calls, brief))
+
+    def gather(company, instruction, seeds, max_uses):
+        try:
+            return _gather(company, instruction, seeds, max_uses, RESEARCH_MODEL)
+        except anthropic.APIStatusError as exc:
+            log.warning("research call failed: %s", exc)
+            return {"notes": "", "cites": [], "errors": [f"api_{exc.status_code}"], "results": 0, "searches": 0}
+
+    jobs = [(topic, n, instr, _seeds(industries, kind), mu)
+            for topic, calls, _ in todo for n, (instr, kind, mu) in enumerate(calls)]
+    gathered: dict[tuple, dict] = {}
     if jobs:
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(jobs)) as pool:
-            # copy_context so each thread's API usage is recorded against this task
-            futures = {(t, n): pool.submit(contextvars.copy_context().run, run, h, w) for t, n, h, w in jobs}
-            for key, fut in futures.items():
-                try:
-                    results[key] = fut.result()
-                except Exception as exc:
-                    log_text = f"(research for this part failed: {type(exc).__name__})"
-                    results[key] = (log_text, [])
-    for topic, calls in RESEARCH_TOPICS:
-        if topic in sections:
-            continue
-        parts = [results[(topic, n)] for n in range(len(calls)) if (topic, n) in results]
-        memo = "\n\n".join(text for text, _ in parts if text)
-        srcs = [s for _, ss in parts for s in ss]
-        sections[topic] = (memo, srcs)
-        # Only research that actually cited web sources is worth reusing.
-        if memo and srcs and "research for this part failed" not in memo:
-            repo.put_research_cache(company_key, topic, memo, srcs)
-    memo = "\n\n".join(sections[t][0] for t, _ in RESEARCH_TOPICS if sections[t][0])
+            futs = {(t, n): pool.submit(contextvars.copy_context().run, gather, company_name, i, s, mu)
+                    for t, n, i, s, mu in jobs}
+            gathered = {k: f.result() for k, f in futs.items()}
+
+    def write(topic, calls, brief):
+        g = [gathered[(topic, n)] for n in range(len(calls))]
+        seeds = [s for _, kind, _ in calls for s in _seeds(industries, kind)]
+        return _write_section(company_name, industry, brief, g, seeds, context), g
+
+    if todo:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(todo)) as pool:
+            futs = {t: pool.submit(contextvars.copy_context().run, write, t, c, b) for t, c, b in todo}
+            for topic, fut in futs.items():
+                memo, g = fut.result()
+                srcs = [{"url": c["url"], "title": c["title"]} for x in g for c in x["cites"]]
+                sections[topic] = {"memo": memo, "sources": srcs, "cached": False,
+                                   "searches": sum(x["searches"] for x in g),
+                                   "errors": [e for x in g for e in x["errors"]]}
+                if srcs and any(x["results"] for x in g):  # only sourced research is reused
+                    repo.put_research_cache(company_key, topic, memo, srcs)
+    memo = "\n\n".join(sections[t]["memo"] for t, _, _ in RESEARCH_TOPICS if sections[t]["memo"])
     if not memo.strip():
-        raise RuntimeError("web research returned no memo text")
+        raise RuntimeError("web research produced no memo")
     seen, sources = set(), []
-    for t, _ in RESEARCH_TOPICS:
-        for s in sections[t][1]:
+    for t, _, _ in RESEARCH_TOPICS:
+        for s in sections[t]["sources"]:
             if s["url"] not in seen:
                 seen.add(s["url"])
                 sources.append(s)
     return {"memo": memo, "sources": sources, "industry": industry,
-            "from_cache": sorted(t for t, _ in RESEARCH_TOPICS if not any(j[0] == t for j in jobs))}
+            "searches": sum(s.get("searches", 0) for s in sections.values()),
+            "search_errors": [e for s in sections.values() for e in s.get("errors", [])],
+            "from_cache": sorted(t for t, s in sections.items() if s.get("cached"))}
 
 
 # --------------------------------------------------------------- drafting --

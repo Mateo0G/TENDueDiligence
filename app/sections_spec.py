@@ -259,7 +259,9 @@ REPORTS: tuple[Report, ...] = (
             "8-12 numbered profiles (H3 '1. Name' etc.) covering every competitor or alternative named in "
             "the dataroom plus the important ones in the web research memo: what they offer, ownership/"
             "funding, regulatory status, pricing, market presence, strengths, weaknesses, and threat to "
-            "the company. Use the web research memo for current public facts."),
+            "the company. Use the web research memo for current public facts; a fact the memo marks "
+            "(unverified) keeps that label. Where the team's prior employers include a competitor (see the "
+            "people and employer facts), state that overlap as a disclosed fact in that competitor's profile."),
         Sub("comparison", "Comparison of Offerings", "Comparison of Offerings",
             "Feature/attribute comparison table of the company vs. each competitor."),
         Sub("threat", "Threat Assessment", "Threat Assessment",
@@ -288,7 +290,8 @@ REPORTS: tuple[Report, ...] = (
         Sub("part_d", "Part D. Deficiencies of {company} Relative to Competitors", "Part D. Deficiencies of CARI Health Relative to Competitors",
             "Where competitors are ahead (scale, clearance, funding, distribution, menu, data)."),
         Sub("next_steps", "Recommended Next Steps", "Recommended Next Steps",
-            "Numbered list of competitive diligence and strategy actions."),
+            "Numbered list of competitive diligence and strategy actions. Do not recommend checking facts the "
+            "evidence already answers (e.g. whether team members worked at a competitor -- state it)."),
         Sub("sources", "Sources", "Sources", "Numbered list of public sources used."),
     )),
     Report("exit_summary", "Executive Summary of Exit Strategy Findings", "Exit Strategy Section of the Due Diligence Report",
@@ -312,7 +315,9 @@ REPORTS: tuple[Report, ...] = (
             "Table of every comparable the company cites (target | acquirer | year | value | multiple | "
             "relevance), verified against the web research memo, with the Team's view of each one's relevance."),
         Sub("more_comps", "Five Additional Comparable Exits", "Five Additional Comparable Exits",
-            "Five further relevant exits from the web research memo, in a table with the same columns, sourced."),
+            "Five further relevant exits from the web research memo, in a table with the same columns "
+            "(acquirer, target, date, value, stage/revenue, multiple), sourced. Never leave a cell 'not "
+            "established': give the best-supported figure or range and mark it (unverified) if needed."),
         Sub("roi", "Estimated ROI to {company} Investors Based on Comparable Exits",
             "Estimated ROI to CARI Health Investors Based on Comparable Exits",
             "Exit value scenarios (low/base/high) from the comparables, the investor's ownership after "
@@ -326,7 +331,8 @@ REPORTS: tuple[Report, ...] = (
         _intro("After the callout, give a table of 8-15 named potential acquirers from the web research memo "
                "(acquirer | type | why a fit | relevant recent deals | likelihood), grouped by tier."),
         Sub("paths", "Most Likely Exit Paths", "Most Likely Exit Paths",
-            "The 2-4 most likely exit paths, each with buyer type, timing trigger and indicative value."),
+            "The 2-4 most likely exit paths, each with buyer type, timing trigger and an indicative value "
+            "RANGE in dollars derived from the comparable transactions."),
     )),
     Report("exit_recs", "Exit Strategy Recommendations", "Exit Strategy Section of the Due Diligence Report",
            "Exit Strategy Recommendations", 13, (
