@@ -302,9 +302,8 @@ contradictions:
   - id: charter_unconfirmed
     pattern: 'Third (Amended|A&R)[^.]{0,200}(not (independently )?confirmed|unconfirmed|not confirmed as filed)'
     unless: 'certified'
-  - id: fingerstick
-    pattern: 'finger-?stick'
-    unless: 'whole[- ]blood|replac|amended|instead'
+  # (No "fingerstick" rule: the reference itself describes the product as a
+  # fingerstick -- capillary whole-blood -- test, as do CID-001 and PRD-001.)
 
 # Documents that ARE in the reference data room: any sentence naming one of
 # these together with an absence phrase is a false "missing" claim.
