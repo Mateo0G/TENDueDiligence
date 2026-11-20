@@ -692,7 +692,8 @@ def list_document_pages(job_id) -> list[dict]:
             cur.execute(
                 "SELECT p.file_id, f.original_filename, f.source_path, p.page_no, p.label, p.method, p.text "
                 "FROM document_pages p JOIN dataroom_files f ON f.id = p.file_id "
-                "WHERE p.job_id=%s AND p.chars > 0 ORDER BY f.created_at, p.page_no",
+                "WHERE p.job_id=%s AND p.chars > 0 AND f.digest->>'superseded_by' IS NULL "
+                "ORDER BY f.created_at, p.page_no",
                 (job_id,),
             )
             return cur.fetchall()

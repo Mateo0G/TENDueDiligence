@@ -798,6 +798,61 @@ def grade_golden_facts(items: list[tuple[str, str, list[str]]], texts: dict[str,
     return {v.id: {"present": v.present, "evidence": v.evidence} for v in out.verdicts}
 
 
+# ------------------------------------------------------ document families --
+
+class _Family(__import__("pydantic").BaseModel):
+    name: str
+    member_docs: list[int]
+    current_doc: int
+    authoritative_doc: int
+    history: str
+
+
+class _Families(__import__("pydantic").BaseModel):
+    families: list[_Family]
+
+
+FAMILIES_SYSTEM = """\
+You organize a startup data room's documents into FAMILIES: versions of the \
+same instrument that supersede one another. Examples: an equity incentive \
+plan and its amendments; a certificate of incorporation and its amended and \
+restated versions (and certified copies of them); successive cap tables or \
+securities ledgers; successive versions of the financial model, budget or \
+pitch deck; an offer letter and later salary or equity adjustments for the \
+SAME person; an agreement and its amendments.
+
+Rules:
+- Only group versions of the same instrument. Different people's offer \
+letters, different investors' notes, or different board consents are NOT one \
+family.
+- Order members oldest to newest by effective date; current_doc is the one in \
+force now (latest effective version, executed over draft).
+- authoritative_doc: a government-certified copy (Secretary of State \
+certified copy, USPTO record, SEC filing) in the family that proves filing \
+status, else 0.
+- history: one sentence giving what changed, with figures and dates, e.g. \
+"Pool increased from 1,333,333 to 1,878,661 shares by the 2024 amendment; \
+Third A&R certificate filed August 15, 2025 per the certified Delaware copy."
+- Omit documents that have no other version. Respond with JSON only.
+"""
+
+
+def group_document_families(company_name: str, lines: list[str]) -> list:
+    """lines: "n | path | type | title | date | status | parties"."""
+    response = _create(
+        _client(), "supersession",
+        model=READ_MODEL,
+        **model_config.no_thinking(READ_MODEL),
+        max_tokens=8000,
+        system=FAMILIES_SYSTEM,
+        output_config=_output_config(_Families, None, READ_MODEL),
+        messages=[{"role": "user", "content": (
+            f"Company: {company_name}. Documents (number | path | type | title | date | signature status | "
+            f"parties):\n" + "\n".join(lines))}],
+    )
+    return parse_structured_response(response, _Families).families
+
+
 # --------------------------------------------------------- absence check --
 
 class _AbsenceVerdict(__import__("pydantic").BaseModel):

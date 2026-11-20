@@ -5,7 +5,7 @@ conflicting sources the same way. Never blocks drafting: on its last
 attempt a failure stores an error marker and drafting proceeds from the
 evidence pack directly.
 """
-from app import claude_client, evidence, pipeline, repo, structured
+from app import claude_client, evidence, pipeline, repo, structured, supersession
 from app.tasks.registry import register
 
 
@@ -13,7 +13,14 @@ from app.tasks.registry import register
 def run_key_facts(task: dict) -> dict:
     payload = task["payload"]
     job_id = payload["job_id"]
-    # Spreadsheet facts first, in code: cap table, scenarios, rounds, grants.
+    name = pipeline.company_names(job_id, payload["company_name"])[1]
+    # Current vs superseded versions first (metadata only), so everything
+    # after -- spreadsheet facts, Key Facts, the pack -- uses current ones.
+    try:
+        families = supersession.run(job_id, name)
+    except Exception as exc:
+        families = {"error": str(exc)[:300]}
+    # Spreadsheet facts in code: cap table, scenarios, rounds, grants.
     try:
         facts = structured.compute(job_id)
     except Exception as exc:
@@ -29,5 +36,6 @@ def run_key_facts(task: dict) -> dict:
         repo.set_job_key_facts(job_id, {"error": str(exc)[:500]})
         return {"fallback": True}
     repo.set_job_key_facts(job_id, result.model_dump())
-    return {"facts": len(result.facts), "conflicts": len(result.conflicts),
+    return {"families": families, "spreadsheet_facts": len(facts.get("facts") or []),
+            "facts": len(result.facts), "conflicts": len(result.conflicts),
             "missing_documents": len(result.missing_documents)}

@@ -97,11 +97,20 @@ def render_digest(f: dict, compact: bool = False) -> str:
             f"{' | ' + status if status and status != 'not_applicable' else ''}")
     if not d:
         return head + " | not read"
+    if d.get("superseded_by"):
+        # An older version: one line, so the current one is what gets cited.
+        return f"{head} | SUPERSEDED by {d['superseded_by']} -- cite the current version, not this one"
     summary = (d.get("summary") or "").strip()
     if compact:
         first = re.split(r"(?<=[.;])\s", summary, maxsplit=1)[0][:240]
         return f"{head} | {first}"
     lines = [head + f" | importance {_importance(f)} | tags: {', '.join(d.get('tags') or []) or '-'}"]
+    if d.get("is_current"):
+        lines[0] += f" | CURRENT version ({d.get('family', 'document family')})"
+        if d.get("family_history"):
+            lines.append(f"Version history: {d['family_history']}")
+        if d.get("authoritative_source"):
+            lines.append(f"Filing confirmed by the government-certified copy: {d['authoritative_source']}")
     if d.get("pages_total"):
         if d.get("read_mode") == "sample":
             lines[0] += f" | routine document: key pages of {d['pages_total']} summarized"
@@ -298,7 +307,8 @@ def source_excerpts(job_id, tags: tuple[str, ...], budget: int) -> str:
     if budget <= 0:
         return ""
     files, _ = unique_files(job_id)
-    cands = [f for f in files if set((f.get("digest") or {}).get("tags") or []) & set(tags) and _importance(f) >= 4]
+    cands = [f for f in files if set((f.get("digest") or {}).get("tags") or []) & set(tags) and _importance(f) >= 4
+             and not (f.get("digest") or {}).get("superseded_by")]
     cands.sort(key=lambda f: (not f["original_filename"].lower().endswith((".xlsx", ".xlsm", ".csv")), -_importance(f)))
     parts, used = [], 0
     for f in cands:
