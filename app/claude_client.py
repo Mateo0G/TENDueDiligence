@@ -578,6 +578,10 @@ Company states...", "The Team considers...". Assessments are the Team's.
 - When the evidence lacks something this section would normally cover, say \
 so in one plain sentence ("The data room contains no executed supply \
 agreement.") and make it a follow-up item. Never pad a gap with generic text.
+- "Required facts computed from the source spreadsheets" are exact (parsed and \
+calculated in code from the cap table, ledger and financial model): state \
+the ones relevant to your part with those exact figures, and never call a \
+count "evolving" or "not recomputed" when it is listed there.
 - Before writing that a document is missing, unsigned or unconfirmed, check \
 the evidence pack: every document listed there IS in the data room, with \
 its signature status. Never mention search tools, search limits or caps; \

@@ -5,7 +5,7 @@ conflicting sources the same way. Never blocks drafting: on its last
 attempt a failure stores an error marker and drafting proceeds from the
 evidence pack directly.
 """
-from app import claude_client, evidence, pipeline, repo
+from app import claude_client, evidence, pipeline, repo, structured
 from app.tasks.registry import register
 
 
@@ -13,9 +13,16 @@ from app.tasks.registry import register
 def run_key_facts(task: dict) -> dict:
     payload = task["payload"]
     job_id = payload["job_id"]
+    # Spreadsheet facts first, in code: cap table, scenarios, rounds, grants.
+    try:
+        facts = structured.compute(job_id)
+    except Exception as exc:
+        facts = {"facts": [], "error": str(exc)[:300]}
+    repo.set_job_structured_facts(job_id, facts)
     try:
         name = pipeline.company_names(job_id, payload["company_name"])[1]
-        result = claude_client.extract_key_facts(name, evidence.build_pack(job_id))
+        result = claude_client.extract_key_facts(
+            name, structured.render(facts) + "\n\n" + evidence.build_pack(job_id))
     except Exception as exc:
         if task["attempts"] + 1 < repo.MAX_TASK_ATTEMPTS:
             raise

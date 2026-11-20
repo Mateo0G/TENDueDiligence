@@ -320,6 +320,20 @@ _TAG_LABELS = {
 }
 
 
+# Which computed spreadsheet facts each report must state (app/structured.py).
+_REQUIRED_FACT_REPORTS = {
+    "financial": "shares outstanding and fully diluted, the note conversion price and its discount to the "
+                 "preferred prices, the next round's implied price per share and step-up, every scenario's "
+                 "revenue, EBITDA and additional capital, and the grant award amounts by year",
+    "corp_legal": "shares outstanding and fully diluted by class, the equity plan pool, the top holders' "
+                  "percentages (founder of outstanding and of fully diluted), the conversion price and its "
+                  "discount to the preferred prices",
+    "executive_summary": "the round terms with the conversion price, the next round's implied price and "
+                         "step-up, the founder's ownership, and the base and downside scenarios",
+    "exit_report": "the conversion price and next round's implied price per share used in the ROI math",
+}
+
+
 def _sibling_parts(spec: SectionSpec, company_name: str) -> list[str]:
     """The other parts of the same report, drafted in parallel by other
     calls -- so this call knows what not to repeat."""
@@ -371,6 +385,9 @@ def build_user_content(job_id: str, company_name: str, spec: SectionSpec) -> str
     if siblings:
         lines += ["", "Other parts of this same report are being written separately -- do not repeat their "
                       "content (refer to them by name if useful):"] + [f"- {s}" for s in siblings]
+    if spec.report in _REQUIRED_FACT_REPORTS:
+        lines += ["", "This part MUST state, with the exact figures, the relevant 'Required facts computed from the "
+                      "source spreadsheets' in the evidence above: " + _REQUIRED_FACT_REPORTS[spec.report] + "."]
     if spec.evidence_tags:
         tags = ", ".join(_TAG_LABELS[t] for t in spec.evidence_tags)
         lines += ["", f"Evidence: the documents that matter most here are in the evidence pack's {tags} groups, "

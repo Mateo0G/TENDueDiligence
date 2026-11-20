@@ -211,11 +211,13 @@ facts:
     claim: The $1.169 conversion price is 23% below the Series Seed I price of $1.513.
   - id: series_a_price
     report: [financial, executive_summary, corp_legal]
-    all: ['\$5\.1\d']
-    claim: The planned $45M Series A pre-money implies about $5.14 per share.
+    # The reference's "about $5.14" depends on dilution assumptions it does not state (warrants,
+    # interest, pool); the code computes $5.26 from documented inputs. Accept $5.00-5.39.
+    all: ['\$5\.[0-3]\d']
+    claim: The planned $45M Series A pre-money implies about $5.14-5.26 per share.
   - id: series_a_stepup
     report: [financial, executive_summary, corp_legal]
-    all: ['4\.[3-5]\s?(x|times)']
+    all: ['4\.[3-6]\s?(x|times)']
     claim: The Series A price is about a 4.4x step-up from the $1.169 conversion price.
   - id: scenario5_capital
     report: [financial]

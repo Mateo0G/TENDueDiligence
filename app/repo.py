@@ -458,6 +458,11 @@ def count_dataroom_files(job_id) -> int:
             return cur.fetchone()[0]
 
 
+def set_job_structured_facts(job_id, facts: dict) -> None:
+    with pool.connection() as conn:
+        conn.execute("UPDATE jobs SET structured_facts=%s, updated_at=now() WHERE id=%s", (Json(facts), job_id))
+
+
 def set_job_research(job_id, research: dict) -> None:
     with pool.connection() as conn:
         conn.execute("UPDATE jobs SET research=%s, updated_at=now() WHERE id=%s", (Json(research), job_id))

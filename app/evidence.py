@@ -237,6 +237,11 @@ def render_research(research: dict | None) -> str:
     return memo
 
 
+def _structured_block(job: dict) -> str:
+    from app import structured
+    return structured.render(job.get("structured_facts")) or "(no spreadsheet facts parsed)"
+
+
 def build_drafting_context(job_id) -> str:
     job = repo.get_job(job_id)
     return "\n".join([
@@ -246,6 +251,8 @@ def build_drafting_context(job_id) -> str:
         "Every figure, name, date and term in your output must agree with this sheet unless a document "
         "shows it is wrong (then say so explicitly).",
         render_key_facts(job.get("key_facts")),
+        "",
+        _structured_block(job),
         "",
         "### Web research memo (public sources, gathered for this report)",
         render_research(job.get("research")),
