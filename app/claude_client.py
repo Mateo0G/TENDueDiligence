@@ -94,7 +94,9 @@ def _output_config(model_cls, effort: str | None = None, model: str = "") -> dic
 
 def _create(client, purpose: str, **params):
     """Streams (the SDK refuses non-streaming calls at high max_tokens) and
-    records the call's usage/cost against the current task."""
+    records the call's usage/cost against the current task. The budget
+    guard refuses a call that could take the job past the hard limit."""
+    usage.check_budget(purpose, params)
     with client.messages.stream(**params) as stream:
         response = stream.get_final_message()
     usage.record(purpose, params["model"], response)
@@ -299,6 +301,7 @@ def extract_key_facts(company_name: str, pack_text: str) -> KeyFactsOutput:
         max_tokens=32000,
         system=KEY_FACTS_SYSTEM_PROMPT,
         output_config=_output_config(KeyFactsOutput, "medium", KEY_FACTS_MODEL),
+        **model_config.no_thinking(KEY_FACTS_MODEL),
         messages=[{"role": "user", "content": (
             f"Company under diligence: {company_name}\n\n### Evidence pack\n{pack_text}"
         )}],
@@ -725,6 +728,7 @@ def score_all_assessments(specs: list[QASpec], company_name: str, report_text: s
     response = _create(
         _client(), "qa_all",
         model=QA_MODEL,
+        **model_config.no_thinking(QA_MODEL),
         max_tokens=48000,
         system=_qa_system_blocks(report_text, dataroom_text),
         output_config=config,
@@ -854,6 +858,41 @@ def group_document_families(company_name: str, lines: list[str]) -> list:
     return parse_structured_response(response, _Families).families
 
 
+# ------------------------------------------------------ contradiction check --
+
+class _Contradiction(__import__("pydantic").BaseModel):
+    id: str
+    issue: str
+    correction: str
+
+
+class _Contradictions(__import__("pydantic").BaseModel):
+    contradictions: list[_Contradiction]
+
+
+def check_contradictions(company_name: str, fact_store: str, sentences: list[tuple[str, str]]) -> list[dict]:
+    """One reading-model call: which report sentences contradict the fact
+    store (wrong figure, date, role, superseded version, filing status)?"""
+    listing = "\n".join(f"[{sid}] {s}" for sid, s in sentences)
+    response = _create(
+        _client(), "verify_contradictions",
+        model=READ_MODEL,
+        **model_config.no_thinking(READ_MODEL),
+        max_tokens=6000,
+        system=("You check sentences from a due diligence report against an authoritative fact store. Report a "
+                "sentence only if it clearly CONTRADICTS the fact store: a different figure, date or share count; "
+                "a superseded version cited as current; a person's role stated wrongly (e.g. an advisory board "
+                "member called a director); something called unfiled or unconfirmed that the store confirms. "
+                "Omissions and sentences the store does not address are NOT contradictions. Respond with JSON only."),
+        output_config=_output_config(_Contradictions, None, READ_MODEL),
+        messages=[{"role": "user", "content": (
+            f"Company: {company_name}.\n\n### Fact store\n{fact_store[:120_000]}\n\n### Report sentences\n{listing}\n\n"
+            "Return each contradicting sentence's id, the issue, and the corrected statement.")}],
+    )
+    out = parse_structured_response(response, _Contradictions)
+    return [c.model_dump() for c in out.contradictions]
+
+
 # --------------------------------------------------------- absence check --
 
 class _AbsenceVerdict(__import__("pydantic").BaseModel):
@@ -904,7 +943,8 @@ def verify_absence_claims(company_name: str, items: list[tuple[str, str, list[st
             for v in out.verdicts}
 
 
-def rewrite_absence_units(company_name: str, units: list[tuple[str, str, list[str], bool]]) -> dict[str, str]:
+def rewrite_absence_units(company_name: str, units: list[tuple[str, str, list[str], bool]],
+                          context: str = "", purpose: str = "absence_rewrite") -> dict[str, str]:
     """units: (id, original text, corrections, is_table_row). One drafting-
     model call rewrites each passage so it states what the documents show,
     changing nothing else."""
@@ -914,16 +954,19 @@ def rewrite_absence_units(company_name: str, units: list[tuple[str, str, list[st
         parts.append(f"=== {uid}{note} ===\nOriginal:\n{text}\nCorrections from the data room:\n"
                      + "\n".join(f"- {c}" for c in corrections))
     response = _create(
-        _client(), "absence_rewrite",
+        _client(), purpose,
         model=DRAFTING_MODEL,
         **model_config.no_thinking(DRAFTING_MODEL),
         max_tokens=16000,
-        system=("You correct passages of a due diligence report that wrongly said a document was missing, "
-                "unsigned or unconfirmed. Rewrite each passage so it accurately reflects the corrections -- naming "
-                "the document, its date and its signature status -- and keep everything else (style, figures, "
-                "other statements, **bold** lead-ins) unchanged. Respond with JSON only."),
+        system=("You correct passages of a due diligence report: a passage may wrongly say a document is "
+                "missing, unsigned or unconfirmed, contradict the fact store, use forbidden wording, or need a "
+                "missing fact added. Rewrite each passage so it applies every listed correction -- with exact "
+                "figures, names, dates and signature status -- and keep everything else (style, other figures "
+                "and statements, **bold** lead-ins) unchanged. Respond with JSON only."),
         output_config=_output_config(_Rewrites, None, DRAFTING_MODEL),
-        messages=[{"role": "user", "content": f"Company: {company_name}.\n\n" + "\n\n".join(parts)}],
+        messages=[{"role": "user", "content": f"Company: {company_name}.\n\n"
+                   + (f"### Fact store (authoritative)\n{context}\n\n" if context else "")
+                   + "\n\n".join(parts)}],
     )
     out = parse_structured_response(response, _Rewrites)
     return {r.id: r.text for r in out.rewrites}
@@ -965,6 +1008,7 @@ def analyze_gaps(company_name: str, report_text: str, qa_summary_text: str) -> G
     response = _create(
         _client(), "gap_analysis",
         model=GAP_MITIGATION_MODEL,
+        **model_config.no_thinking(GAP_MITIGATION_MODEL),
         max_tokens=32000,
         system=GAP_ANALYSIS_SYSTEM_PROMPT,
         output_config=_output_config(GapAnalysisOutput, "medium", GAP_MITIGATION_MODEL),
@@ -982,6 +1026,7 @@ def generate_mitigations(company_name: str, gap_analysis: GapAnalysisOutput) -> 
     response = _create(
         _client(), "mitigation",
         model=GAP_MITIGATION_MODEL,
+        **model_config.no_thinking(GAP_MITIGATION_MODEL),
         max_tokens=32000,
         system=MITIGATION_SYSTEM_PROMPT,
         output_config=_output_config(MitigationOutput, "medium", GAP_MITIGATION_MODEL),

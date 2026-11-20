@@ -611,6 +611,18 @@ def absence_log(job_id: str):
         raise HTTPException(status_code=404, detail="no absence check has run for this job")
 
 
+@app.get("/jobs/{job_id}/verification-log")
+def verification_log(job_id: str):
+    """What the verification pass found and corrected: required facts that
+    were missing, contradictions with the fact store, forbidden wording."""
+    _require_job(job_id)
+    from app import verify
+    try:
+        return json.loads(storage.get_bytes(verify.log_key(job_id)).decode("utf-8"))
+    except Exception:
+        raise HTTPException(status_code=404, detail="no verification pass has run for this job")
+
+
 @app.post("/jobs/{job_id}/golden-eval")
 def golden_eval(job_id: str, name: str = "cari_health"):
     """Score this job's drafted report against tests/golden/<name>.yaml (see

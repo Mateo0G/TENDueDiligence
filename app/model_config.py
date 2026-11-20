@@ -18,7 +18,9 @@ import os
 # Sonnet tier writes the report; Haiku tier reads, extracts and checks.
 DRAFTING_MODEL = os.environ.get("DRAFTING_MODEL", "claude-sonnet-5")
 KEY_FACTS_MODEL = os.environ.get("KEY_FACTS_MODEL", DRAFTING_MODEL)
-QA_MODEL = os.environ.get("QA_MODEL", DRAFTING_MODEL)
+# QA scores the finished report for the Report Card appendix; on Haiku 5.5
+# it costs ~$0.09 instead of $0.41 (decided 2026-11-20). QA_MODEL overrides.
+QA_MODEL = os.environ.get("QA_MODEL", "claude-haiku-5-5")
 GAP_MITIGATION_MODEL = os.environ.get("GAP_MITIGATION_MODEL", DRAFTING_MODEL)
 # Haiku 5.5 is the current Haiku tier: $0.10/$0.50 per MTok for prompts up
 # to 100k tokens, 10x cheaper than Haiku 4.5. Measured on the CARI room

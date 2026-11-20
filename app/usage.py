@@ -74,3 +74,60 @@ def record(purpose: str, model: str, response, batch: bool = False) -> dict:
     except Exception:
         log.exception("could not record API usage")
     return stats
+
+
+# ------------------------------------------------------------ budget guard --
+# Per-report limits. The soft limit stops optional work (verification
+# rewrites); the hard limit refuses any call whose estimated cost would take
+# the job past it, so a run can never exceed it.
+SOFT_LIMIT_USD = float(__import__("os").environ.get("JOB_SOFT_LIMIT_USD", "4.50"))
+HARD_LIMIT_USD = float(__import__("os").environ.get("JOB_HARD_LIMIT_USD", "5.00"))
+
+
+class BudgetExceeded(RuntimeError):
+    pass
+
+
+def _job_spend(job_id) -> float:
+    from app import repo
+    try:
+        return repo.job_total_cost(job_id)
+    except Exception:
+        return 0.0
+
+
+def over_soft_limit(job_id) -> bool:
+    spent = _job_spend(job_id)
+    if spent > SOFT_LIMIT_USD:
+        log.warning("job %s spend $%.2f is past the soft limit $%.2f: skipping optional work", job_id, spent,
+                    SOFT_LIMIT_USD)
+        return True
+    return False
+
+
+def estimate_call(params: dict) -> float:
+    """A deliberately high estimate of one call's cost: uncached input at
+    full price (cached system blocks at the cache-read rate), output at up
+    to 8k tokens (calls rarely use their whole max_tokens)."""
+    price_in, price_out, read_mult = model_config.price(params.get("model", ""))
+    chars = 0.0
+    for block in params.get("system") or []:
+        if isinstance(block, dict):
+            chars += len(block.get("text", "")) * (read_mult if block.get("cache_control") else 1)
+        else:
+            chars += len(str(block))
+    for m in params.get("messages") or []:
+        c = m.get("content")
+        chars += len(c) if isinstance(c, str) else sum(len(str(x)) for x in c or [])
+    out = min(params.get("max_tokens", 4000), 8000)
+    return chars / 3.5 * price_in / 1e6 + out * price_out / 1e6
+
+
+def check_budget(purpose: str, params: dict) -> None:
+    ctx = _current.get()
+    if ctx is None or purpose.startswith("eval:"):
+        return
+    spent, est = _job_spend(ctx[0]), estimate_call(params)
+    if spent + est > HARD_LIMIT_USD:
+        raise BudgetExceeded(f"{purpose} refused: job spend ${spent:.2f} + estimated ${est:.2f} would pass the "
+                             f"${HARD_LIMIT_USD:.2f} per-report limit")
