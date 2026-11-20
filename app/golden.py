@@ -72,8 +72,9 @@ def evaluate(job_id, name: str = "cari_health", grade_with_llm: bool = True) -> 
     for fact in gold["facts"]:
         reports = fact["report"]
         scope = "\n\n".join(texts.get(r, "") for r in reports)
-        ok = bool(scope) and all(re.search(p, scope, re.I) for p in fact["all"])
-        elsewhere = (not ok) and all(re.search(p, everything, re.I) for p in fact["all"])
+        # A fact with no string pattern is always graded by the model.
+        ok = bool(scope) and bool(fact["all"]) and all(re.search(p, scope, re.I) for p in fact["all"])
+        elsewhere = (not ok) and bool(fact["all"]) and all(re.search(p, everything, re.I) for p in fact["all"])
         r = {"id": fact["id"], "report": reports, "claim": fact["claim"],
              "pass": ok, "method": "string" if ok else None, "found_elsewhere": elsewhere}
         results.append(r)
@@ -110,6 +111,15 @@ def evaluate(job_id, name: str = "cari_health", grade_with_llm: bool = True) -> 
                 if any(p.search(s) for p in pats) and any(a.search(s) for a in absence):
                     false_missing.append({"document": doc["id"], "report": report, "sentence": s[:300]})
 
+    contradictions = []
+    for rule in gold.get("contradictions", []):
+        pat = re.compile(rule["pattern"], re.I)
+        unless = re.compile(rule["unless"], re.I) if rule.get("unless") else None
+        for report, text in texts.items():
+            for s in _sentences(text):
+                if pat.search(s) and not (unless and unless.search(s)):
+                    contradictions.append({"id": rule["id"], "report": report, "sentence": s[:300]})
+
     passed = sum(1 for r in results if r["pass"])
     return {
         "golden": name,
@@ -119,6 +129,7 @@ def evaluate(job_id, name: str = "cari_health", grade_with_llm: bool = True) -> 
         "results": results,
         "forbidden": forbidden,
         "false_missing_claims": false_missing,
+        "contradictions": contradictions,
         "coverage": _coverage(job_id),
     }
 

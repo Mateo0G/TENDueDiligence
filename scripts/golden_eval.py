@@ -45,6 +45,9 @@ for r in g["results"]:
 print(f"False 'missing' claims: {len(g['false_missing_claims'])}")
 for m in g["false_missing_claims"][:15]:
     print(f"  [{m['report']}] {m['document']}: {m['sentence'][:160]}")
+print(f"Contradictions: {len(g.get('contradictions', []))}")
+for m in g.get("contradictions", [])[:15]:
+    print(f"  [{m['report']}] {m['id']}: {m['sentence'][:160]}")
 print(f"Forbidden text: {g['forbidden'] or 'none'}")
 cov = g["coverage"]
 print(f"Coverage: {cov['files']} files, {len(cov['short'])} short " + str(cov["short"][:8]))

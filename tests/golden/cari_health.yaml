@@ -192,12 +192,117 @@ facts:
     all: ['QuidelOrtho']
     claim: QuidelOrtho is on the potential acquirer list.
 
+  # ---- added 2026-11-20 (accuracy round 2)
+  - id: outstanding_shares
+    report: [corp_legal, financial]
+    all: ['6,232,188']
+    claim: 6,232,188 shares are outstanding per the October 27, 2026 Carta cap table.
+  - id: founder_both_percentages
+    report: [corp_legal, financial, hr]
+    all: ['63\.5%', '51\.4%']
+    claim: The founder holds 63.5% of outstanding and 51.4% of fully diluted shares.
+  - id: cap_conversion_price
+    report: [financial, corp_legal, executive_summary]
+    all: ['1\.169']
+    claim: The Seed 2 note converts at $1.169 per share ($9.0M cap on 7,698,766 fully diluted shares).
+  - id: conversion_discount_seed1
+    report: [financial, corp_legal]
+    all: ['23%', '1\.513']
+    claim: The $1.169 conversion price is 23% below the Series Seed I price of $1.513.
+  - id: series_a_price
+    report: [financial, executive_summary, corp_legal]
+    all: ['\$5\.1\d']
+    claim: The planned $45M Series A pre-money implies about $5.14 per share.
+  - id: series_a_stepup
+    report: [financial, executive_summary, corp_legal]
+    all: ['4\.[3-5]\s?(x|times)']
+    claim: The Series A price is about a 4.4x step-up from the $1.169 conversion price.
+  - id: scenario5_capital
+    report: [financial]
+    all: ['37\.7', '0\.3 million|\$0\.3M|332,999|\$333,']
+    claim: Scenario 5 (12-month delay at base penetration) gives $37.7M of 2032 revenue and needs about $0.3M of additional capital.
+  - id: third_ar_filed
+    report: [corp_legal]
+    all: ['Third (Amended|A&R)', 'August 15, 2025|Aug\.? 15, 2025']
+    claim: The Third Amended and Restated Certificate was filed on August 15, 2025, confirmed by the certified Delaware copy.
+  - id: sherrick_advisory
+    report: [hr, regulatory, scitech, executive_summary, corp_legal]
+    all: ['Sherrick', 'advisory']
+    claim: Robert Sherrick is a former advisory board member (left December 2025) and the pilot investigator -- not a director.
+  - id: bank_balance_aug31
+    report: [financial]
+    all: ['256,5\d\d|\$256\.5|\$256,5']
+    claim: The August 31, 2026 bank statements show combined balances of about $256,500.
+  - id: nih_awards_by_year
+    report: [financial, commercial, executive_summary]
+    all: ['318,172', '1,447,789', '1,069,475']
+    claim: NIH/NIDA award U44 DA059627 provides Year 1 $318,172, Year 2 $1,447,789 and Year 3 $1,069,475.
+  - id: minutes_650k_error
+    report: [corp_legal, financial]
+    all: ['650,000|\$650K|\$650k']
+    claim: Management will correct a $650,000 seed-close figure in the January 2026 board minutes.
+  - id: abbott_profiled
+    report: [competition, competition_supp]
+    all: ['Abbott']
+    claim: Abbott is profiled as a competitor.
+  - id: lzi_profiled
+    report: [competition, competition_supp]
+    all: ['LZI|Lin-Zhi']
+    claim: Lin-Zhi International (LZI) is profiled as a competitor.
+  - id: aegis_profiled
+    report: [competition, competition_supp]
+    all: ['Aegis']
+    claim: Aegis Sciences is profiled as a competitor.
+  - id: millennium_profiled
+    report: [competition, competition_supp]
+    all: ['Millennium']
+    claim: Millennium Health is profiled as a competitor.
+  - id: five_comparable_exits
+    report: [exit_report]
+    all: []
+    claim: The report lists at least five additional comparable exits, each with an acquirer, a date and a deal value (not "not established").
+  - id: exit_path_value_ranges
+    report: [exit_report, acquirers, exit_recs, exit_summary]
+    all: []
+    claim: Each proposed exit path is given a value range in dollars.
+  - id: siemens_acquirer
+    report: [acquirers, exit_report]
+    all: ['Siemens']
+    claim: Siemens Healthineers is on the potential acquirer list.
+  - id: procisedx_team_overlap
+    report: [hr, competition, competition_supp, executive_summary]
+    all: ['ProciseDx']
+    claim: Several team members previously worked at ProciseDx, which is profiled as a competitor, and the report discloses this overlap.
+  - id: antidilution_from_charter
+    report: [corp_legal]
+    all: []
+    claim: The anti-dilution analysis and waiver recommendation are based on the charter's actual broad-based weighted-average provision, not on assumed "typical" terms.
+
 # Statements that must NOT appear anywhere.
 forbidden:
   - id: name_leak
     patterns: ['\bZZ\b', 'delete me', 'Stage 2 Test']
   - id: search_cap_wording
     patterns: ['search[- ]tool cap', 'search cap', 'cap was reached', 'search limit']
+  - id: tool_failure_wording
+    patterns: ['search tool failed', 'tool (failed|was unavailable)', 'not populated', 'Not established']
+
+# Wrong facts: a sentence matching `pattern` is a contradiction unless the
+# same sentence also matches `unless` (e.g. a history line that states the
+# old figure next to the current one).
+contradictions:
+  - id: plan_pool_superseded
+    pattern: '1,333,333'
+    unless: '1,878,661|increased|amend'
+  - id: sherrick_director
+    pattern: 'Sherrick[^.]{0,160}(board of directors|\bdirector\b|resigned (from )?the board)|(board of directors|\bdirector\b)[^.]{0,160}Sherrick'
+    unless: 'advisory'
+  - id: charter_unconfirmed
+    pattern: 'Third (Amended|A&R)[^.]{0,200}(not (independently )?confirmed|unconfirmed|not confirmed as filed)'
+    unless: 'certified'
+  - id: fingerstick
+    pattern: 'finger-?stick'
+    unless: 'whole[- ]blood|replac|amended|instead'
 
 # Documents that ARE in the reference data room: any sentence naming one of
 # these together with an absence phrase is a false "missing" claim.
